@@ -25,6 +25,7 @@ jobs:
           $env:PATH = "$env:PATH;$pwd\target\release"
           still version
           still test conformance
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Run every example on MSVC
         shell: pwsh

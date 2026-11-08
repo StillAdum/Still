@@ -1,6 +1,6 @@
 # Still — Worklog
 
-State: **v0.2.0 — new Python/Lua-style syntax, full rewrite, all tests green.** Read this before touching anything. Token-dense on purpose.
+State: **v0.2.0 — new Python/Lua-style syntax, full rewrite, all tests green; released as v0.2.0 with Windows installer + VSIX (GitHub Actions builds it on windows-latest).** Read this before touching anything. Token-dense on purpose.
 
 ## What Still is (v0.2)
 
@@ -18,16 +18,19 @@ src/
   span.rs      spans, Diag, did-you-mean (levenshtein)
   check.rs     names, inference, monomorphization, flow-none, builtins, modules, externs, diagnostics
   emit_c.rs    checked IR -> C11; refcount emission; type registry (list/dict/struct/tuple/opt/soa/eq/print/tostr helpers)
-  cc.rs        find cc/gcc/clang/cl, flag translation, -flto, STIL_DEBUG define
+  cc.rs        find cc/gcc/clang then cl; Windows: vswhere -> vcvars64.bat wrap via generated still_build.bat; cl runs with current_dir=tmp (objs land there), /Fe absolute
   lib.rs       driver: module loading ('use'), stdlib embedding, build/run/test/new, ide commands
   bin/still.rs CLI
   rt/          embedded C runtime (header + impl), compiled alongside generated code
   stdlib/      embedded Still modules: math, sort, random, time, io, os
 conformance/   valid/ + invalid/ (.strc + .expected; tests are the syntax spec)
+SETUP-WINDOWS.md + install.ps1/uninstall.ps1   Windows end-user install (zip ships these)
+RELEASE_NOTES.md  becomes the GitHub release body (tag push)
 examples/      showcase programs, double as docs
 tests/         cargo tests: conformance runner, examples compile, fuzz (garbage in -> no panic/hang)
 vscode/        extension: grammar, completion, hover, diagnostics, run/debug, DAP; README = setup instructions
-.github/       CI: build, cargo test, conformance, examples, debug-mode panic check, bench vs C, extension check, windows (best-effort)
+.github/       ci.yml: build, cargo test, conformance, examples, panic check, bench vs C, extension check, windows job (MSVC, real gate, no continue-on-error)
+               release.yml: tag v* -> windows-latest build -> conformance+examples on MSVC -> zip (still.exe+install.ps1+SETUP-WINDOWS.md+examples) + vsce vsix -> gh release create/upload
 ```
 
 ## Commands
@@ -106,8 +109,18 @@ cargo test --release
 - Dict iteration order is hash order (deterministic per build, not insertion).
 - `print`/`str()` of a `str?` prints the string or `none` (nested containers still quote strings).
 - Aug-assign on a ref-typed list element (`xs[i] += s`) retains an extra ref (leak, not a crash).
-- Windows: cc.rs translates flags and CI runs a best-effort job; only smoke-tested.
+- Windows: fully supported since v0.2.0 release — CI runs full conformance on MSVC; release zip built on windows-latest. Debug overflow checks use an _MSC_VER shim in still_rt.h (MSVC has no __builtin_*_overflow).
 - CPython bridge from v0.1 was dropped in the redesign (the `extern "C"` hub is the path back; see roadmap Phase 6).
+
+## Windows release notes (v0.2.0, how it ships)
+
+- Repo: github.com/StillAdum/Still (delete+recreated fresh, single squashed commit, tag v0.2.0).
+- Release = GitHub Release on tag: body from RELEASE_NOTES.md, assets still-v0.2.0-windows-x64.zip + still-lang-0.2.0.vsix, built by release.yml on windows-latest.
+- zip layout: still.exe, install.ps1 (copies to %LOCALAPPDATA%\Programs\Still, user PATH), uninstall.ps1, SETUP-WINDOWS.md, examples/.
+- End user needs VS Build Tools (C++ workload) or WinLibs gcc; still finds them itself (vswhere fallback when cl is not on PATH — works from any terminal, no dev prompt needed).
+- MSVC gotchas fixed: __builtin overflow shims; cl objs go to tmp dir; /Fe forced absolute; vcvars wrapped in a generated .bat (quoting: never put trailing-backslash paths before a closing quote in bat/cmd lines — MSVCRT eats \" ).
+- Doc gotcha learned: methods CANNOT mutate self (structs are values, self is a copy) — the idiom is `p = p.hurt(30)` returning a new struct; SETUP-WINDOWS.md sample is compiler-verified.
+- Deleted v0.1 leftovers: conformance/py (old-syntax pyinterop, did not compile), examples_dbg (old Rust scratch).
 
 ## Next steps (priority order)
 

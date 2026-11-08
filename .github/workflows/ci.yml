@@ -86,11 +86,14 @@ jobs:
         shell: pwsh
         run: |
           cargo build --release
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           $env:PATH = "$env:PATH;$pwd\target\release"
           still version
           'print("hello from windows")' | Out-File -Encoding utf8 hello.strc
           still run hello.strc
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           still test conformance
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           foreach ($f in Get-ChildItem examples\*.strc) {
             Write-Host "== $($f.Name)"
             still run $f.FullName | Out-Null

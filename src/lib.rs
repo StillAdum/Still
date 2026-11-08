@@ -37,7 +37,9 @@ pub struct Loaded {
 }
 
 fn load_module(path: &Path) -> Result<String, String> {
-    std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {}", path.display(), e))
+    std::fs::read_to_string(path)
+        .map(|s| s.strip_prefix('\u{feff}').unwrap_or(&s).replace("\r\n", "\n"))
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))
 }
 
 pub fn load_program(main: &Path) -> Result<Loaded, String> {
@@ -181,10 +183,10 @@ pub fn test_dir(dir: &Path, release: bool) -> Result<Vec<TestResult>, String> {
     for f in entries {
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         let expected_path = f.with_extension("expected");
-        let expected = std::fs::read_to_string(&expected_path).unwrap_or_default();
+        let expected = std::fs::read_to_string(&expected_path).unwrap_or_default().replace("\r\n", "\n");
         match compile_and_capture(&f, &bdir, release) {
             Ok((stdout, code)) => {
-                let ok = code == 0 && stdout == expected;
+                let ok = code == 0 && stdout.replace("\r\n", "\n") == expected;
                 results.push(TestResult {
                     name,
                     passed: ok,
@@ -209,8 +211,8 @@ pub fn test_dir(dir: &Path, release: bool) -> Result<Vec<TestResult>, String> {
     for f in ientries {
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         let expected_path = f.with_extension("expected");
-        let expected = std::fs::read_to_string(&expected_path).unwrap_or_default();
-        let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?;
+        let expected = std::fs::read_to_string(&expected_path).unwrap_or_default().replace("\r\n", "\n");
+        let src = std::fs::read_to_string(&f).map_err(|e| e.to_string())?.replace("\r\n", "\n");
         let (stmts, diags) = parser::parse(&src, f.to_string_lossy().to_string().as_str());
         let mut msgs: Vec<String> = diags.iter().map(|d| d.to_string()).collect();
         if msgs.is_empty() && !stmts.is_empty() {
@@ -243,7 +245,7 @@ fn compile_and_capture(f: &Path, bdir: &Path, release: bool) -> Result<(String, 
     std::fs::write(&cfile, &out.c).map_err(|e| e.to_string())?;
     let exe = bdir.join(format!("t_{}", f.file_stem().unwrap().to_string_lossy()));
     cc::compile(&cfile, &bdir.join("still_rt.c"), bdir, &exe, release)?;
-    let outp = std::process::Command::new(&exe).output().map_err(|e| format!("run failed: {}", e))?;
+    let outp = std::process::Command::new(&exe).current_dir(bdir).output().map_err(|e| format!("run failed: {}", e))?;
     Ok((String::from_utf8_lossy(&outp.stdout).to_string(), outp.status.code().unwrap_or(1)))
 }
 
