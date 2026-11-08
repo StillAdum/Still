@@ -1,0 +1,29 @@
+ages = {"ana": 31, "bo": 9}
+print(len(ages))
+print(ages["ana"])
+ages["bo"] = 10
+print(ages["bo"])
+ages["cy"] = 44
+print(len(ages))
+print(ages)
+print("ana" in ages)
+print("zed" not in ages)
+for k in ages:
+    print(k, ages[k])
+ks = keys(ages)
+print(len(ks))
+total = 0
+for k, v in pairs(ages):
+    total += v
+print(total)
+counts = {}
+counts["a"] = 1
+counts["b"] = 2
+print(counts)
+by_id = {1: "one", 2: "two"}
+print(by_id[2])
+print(by_id)
+by_id[3] = "three"
+print(2 in by_id)
+ages.clear()
+print(len(ages))

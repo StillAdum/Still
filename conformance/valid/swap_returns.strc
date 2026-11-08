@@ -1,0 +1,24 @@
+func divmod(a: int, b: int) -> (int, int):
+    return a // b, a % b
+
+q, r = divmod(17, 5)
+print(q, r)
+q2, r2 = divmod(20, 4)
+print(q2, r2)
+
+func stats(nums):
+    total = 0
+    for n in nums:
+        total += n
+    avg = total / len(nums)
+    return total, avg, len(nums)
+
+s, a, n = stats([2, 4, 6, 8])
+print(s, a, n)
+
+x, y = 1, 2
+x, y = y, x + y
+print(x, y)
+a2, b2, c2 = 1, 2, 3
+a2, b2 = b2, a2
+print(a2, b2, c2)

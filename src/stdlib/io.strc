@@ -1,0 +1,13 @@
+func read_lines(path: str) -> [str]:
+    data = read_file(path)
+    lines = data.split("\n")
+    if len(lines) > 0:
+        if lines[len(lines) - 1] == "":
+            pop(lines)
+    return lines
+
+func write_lines(path: str, lines: [str]):
+    out = ""
+    for ln in lines:
+        out = out + ln + "\n"
+    write_file(path, out)

@@ -1,0 +1,38 @@
+use math
+
+width = 40
+height = 12
+x0 = -2.1
+y0 = -1.2
+dx = 0.06
+dy = 0.17
+row = 0
+while row < height:
+    line = ""
+    col = 0
+    while col < width:
+        cx = x0 + col * dx
+        cy = y0 + row * dy
+        zx = 0.0
+        zy = 0.0
+        i = 0
+        while i < 40:
+            x2 = zx * zx
+            y2 = zy * zy
+            if x2 + y2 > 4.0:
+                break
+            zy = 2.0 * zx * zy + cy
+            zx = x2 - y2 + cx
+            i += 1
+        if i == 40:
+            line = line + "#"
+        elif i > 10:
+            line = line + "+"
+        elif i > 3:
+            line = line + "."
+        else:
+            line = line + " "
+        col += 1
+    print(line)
+    row += 1
+print(sum([1, 2, 3]))

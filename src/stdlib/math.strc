@@ -1,0 +1,53 @@
+extern "C":
+    func sqrt(x: float) -> float
+    func sin(x: float) -> float
+    func cos(x: float) -> float
+    func tan(x: float) -> float
+    func asin(x: float) -> float
+    func acos(x: float) -> float
+    func atan(x: float) -> float
+    func atan2(y: float, x: float) -> float
+    func exp(x: float) -> float
+    func log(x: float) -> float
+    func log2(x: float) -> float
+    func log10(x: float) -> float
+    func pow(x: float, y: float) -> float
+    func floor(x: float) -> float
+    func ceil(x: float) -> float
+    func round(x: float) -> float
+    func fmod(x: float, y: float) -> float
+
+pi = 3.141592653589793
+e = 2.718281828459045
+
+func gcd(a: int, b: int) -> int:
+    while b != 0:
+        a, b = b, a % b
+    if a < 0:
+        a = -a
+    return a
+
+func lcm(a: int, b: int) -> int:
+    if a == 0 or b == 0:
+        return 0
+    m = a * b
+    if m < 0:
+        m = -m
+    return m // gcd(a, b)
+
+func clamp(x: float, lo: float, hi: float) -> float:
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+func lerp(a: float, b: float, t: float) -> float:
+    return a + (b - a) * t
+
+func sign(x: float) -> int:
+    if x > 0.0:
+        return 1
+    if x < 0.0:
+        return -1
+    return 0

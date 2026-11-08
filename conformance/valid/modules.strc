@@ -1,0 +1,19 @@
+use math
+use sort
+use math: gcd
+
+print(math.sqrt(144.0))
+print(math.pi > 3.14 and math.pi < 3.15)
+print(gcd(48, 36))
+nums = [5, 2, 9, 1]
+sort.sort(nums)
+print(nums)
+print(math.clamp(5.0, 0.0, 3.0))
+print(math.lerp(0.0, 10.0, 0.25))
+use random
+seed(7)
+a = rand(100)
+seed(7)
+b = rand(100)
+print(a == b)
+print(type_of(math.floor(1.5)))

@@ -1,0 +1,34 @@
+type Point:
+    x: float = 0.0
+    y: float = 0.0
+
+    func mag(self) -> float:
+        return (self.x ** 2 + self.y ** 2) ** 0.5
+
+    func moved(self, dx: float, dy: float):
+        return Point(self.x + dx, self.y + dy)
+
+origin = Point()
+p = Point(3.0, 4.0)
+print(origin)
+print(p.mag())
+q = p.moved(1.0, 1.0)
+print(q.x, q.y)
+r = p
+r.x = 99.0
+print(p.x, r.x)
+
+type Player:
+    name: str
+    level: int = 1
+
+hero = Player("ana")
+print(hero.name, hero.level)
+hero.level = hero.level + 1
+print(hero.name, hero.level)
+
+roster = [Player("a"), Player("b", 5)]
+roster[0].level = 10
+print(roster[0].name, roster[0].level)
+for pl in roster:
+    print(pl.name, pl.level)

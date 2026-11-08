@@ -1,0 +1,36 @@
+func identity(x):
+    return x
+
+print(identity(42))
+print(identity("str"))
+print(identity(2.5))
+
+func first_of(items, fallback):
+    if len(items) > 0:
+        return items[0]
+    return fallback
+
+print(first_of([10, 20], 0))
+print(first_of([], "empty"))
+print(first_of([], 9.9))
+
+func count_if(items, flag):
+    n = 0
+    for it in items:
+        if flag:
+            n += 1
+    return n
+
+print(count_if([1, 2, 3], true))
+
+func max3(a, b, c):
+    m = a
+    if b > m:
+        m = b
+    if c > m:
+        m = c
+    return m
+
+print(max3(1, 5, 3))
+print(max3(1.5, 0.5, 2.5))
+print(max3("a", "c", "b"))

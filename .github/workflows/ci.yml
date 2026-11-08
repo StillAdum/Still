@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build compiler (release)
+        run: cargo build --release
+
+      - name: Rust tests (conformance + fuzz)
+        run: cargo test --release
+
+      - name: Language conformance suite
+        run: ./target/release/still test conformance
+
+      - name: Run every example
+        run: |
+          set -e
+          for f in examples/*.strc; do
+            echo "== $f"
+            ./target/release/still run "$f" > /dev/null
+          done
+
+      - name: Debug-mode safety checks (panics carry file:line)
+        run: |
+          set -e
+          echo 'xs = [1]
+          print(xs[5])' > /tmp/oob.strc
+          if ./target/release/still run /tmp/oob.strc > /tmp/oob.out 2> /tmp/oob.err; then
+            echo "out-of-range index did not stop the program"; exit 1
+          fi
+          grep -q "index out of range" /tmp/oob.err
+
+      - name: Release-mode benchmark sanity (fib matches gcc -O2 within 3x)
+        run: |
+          set -e
+          cat > /tmp/bench.strc << 'BENCH'
+          func fib(n):
+              if n < 2:
+                  return n
+              return fib(n - 1) + fib(n - 2)
+          print(fib(32))
+          BENCH
+          ./target/release/still build /tmp/bench.strc -o /tmp/bench_still --release
+          cat > /tmp/bench.c << 'C'
+          #include <stdio.h>
+          static long fib(long n) { if (n < 2) return n; return fib(n-1) + fib(n-2); }
+          int main() { printf("%ld\n", fib(32)); return 0; }
+          C
+          gcc -O2 /tmp/bench.c -o /tmp/bench_c
+          T0=$(date +%s%N); /tmp/bench_still > /tmp/still_out; T1=$(date +%s%N)
+          T2=$(date +%s%N); /tmp/bench_c     > /tmp/c_out;     T3=$(date +%s%N)
+          STILL_MS=$(( (T1 - T0) / 1000000 ))
+          C_MS=$(( (T3 - T2) / 1000000 ))
+          echo "still=${STILL_MS}ms c=${C_MS}ms"
+          diff /tmp/still_out /tmp/c_out
+          LIMIT=$(( C_MS * 3 + 100 ))
+          if [ "$STILL_MS" -gt "$LIMIT" ]; then
+            echo "still is more than 3x slower than C (${STILL_MS}ms vs ${C_MS}ms)"
+            exit 1
+          fi
+
+      - name: VSCode extension JS syntax check
+        run: |
+          node --check vscode/extension.js
+          node --check vscode/dap.js
+          python3 -c "import json; json.load(open('vscode/package.json')); json.load(open('vscode/syntaxes/still.tmLanguage.json'))"
+
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build, conformance and examples on MSVC
+        shell: pwsh
+        run: |
+          cargo build --release
+          $env:PATH = "$env:PATH;$pwd\target\release"
+          still version
+          'print("hello from windows")' | Out-File -Encoding utf8 hello.strc
+          still run hello.strc
+          still test conformance
+          foreach ($f in Get-ChildItem examples\*.strc) {
+            Write-Host "== $($f.Name)"
+            still run $f.FullName | Out-Null
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }

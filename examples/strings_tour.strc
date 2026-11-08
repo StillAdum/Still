@@ -1,0 +1,15 @@
+s = "The Still programming language"
+print("len: {len(s)}")
+print("upper: {s.upper()}")
+first = s.split(" ")[0]
+print("first word: {first}")
+print("slice: {s[4:9]}")
+print("last 8: {s[-8:]}")
+print("has program: {s.contains("program")}")
+for word in s.split(" "):
+    print("- {word}")
+query = "  still lang  "
+trimmed = query.trim()
+print("[{trimmed}]")
+initial = trimmed[0]
+print("first char: {initial}")

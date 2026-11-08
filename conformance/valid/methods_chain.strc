@@ -1,0 +1,28 @@
+type Counter:
+    value: int = 0
+
+    func bump(self, by: int = 1):
+        self_val = self.value
+        return Counter(self_val + by)
+
+c = Counter()
+c = c.bump()
+c = c.bump(5)
+print(c.value)
+print(Counter(100).bump(-10).value)
+
+type Box:
+    label: str
+    weight: float = 1.0
+
+boxes = [Box("a"), Box("b", 2.5)]
+boxes.push(Box("c", 0.5))
+heaviest = boxes[0]
+for bx in boxes:
+    if bx.weight > heaviest.weight:
+        heaviest = bx
+print(heaviest.label, heaviest.weight)
+names = []
+for bx in boxes:
+    names.push(bx.label)
+print(names)

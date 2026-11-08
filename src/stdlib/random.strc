@@ -1,0 +1,20 @@
+func rand_float() -> float:
+    return (rand(1000000000) + 1) / 1000000001.0
+
+func rand_range(lo: int, hi: int) -> int:
+    if hi <= lo:
+        return lo
+    return lo + rand(hi - lo + 1)
+
+func shuffle(a):
+    n = len(a)
+    i = n - 1
+    while i > 0:
+        j = rand(i + 1)
+        a[i], a[j] = a[j], a[i]
+        i -= 1
+    return a
+
+func choice(a):
+    check(len(a) > 0, "choice needs a non-empty list")
+    return a[rand(len(a))]

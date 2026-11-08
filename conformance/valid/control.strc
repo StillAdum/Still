@@ -1,0 +1,31 @@
+for i in range(3, 0, -1):
+    print(i)
+n = 0
+while true:
+    n += 1
+    if n >= 3:
+        break
+print(n)
+for i in range(5):
+    if i % 2 == 0:
+        continue
+    print(i)
+grade = 87
+if grade >= 90:
+    print("A")
+elif grade >= 80:
+    print("B")
+else:
+    print("C")
+parity = "even" if n % 2 == 0 else "odd"
+print(parity)
+x = 5 if grade > 50 else -5
+print(x)
+if true: print("single line")
+count = 0
+for i in range(10):
+    for j in range(10):
+        count += 1
+        if j == 1:
+            break
+print(count)

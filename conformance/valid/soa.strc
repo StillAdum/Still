@@ -1,0 +1,23 @@
+@soa type Particle:
+    x: float
+    y: float
+    vx: float
+    vy: float
+
+parts = Particle(3)
+parts.push(0.0, 0.0, 1.0, 0.5)
+parts.push(10.0, 5.0, -1.0, -0.5)
+parts.push(5.0, 5.0, 0.0, 1.0)
+print(len(parts))
+for i in parts:
+    parts.x[i] = parts.x[i] + parts.vx[i] * 0.5
+    parts.y[i] = parts.y[i] + parts.vy[i] * 0.5
+print(parts.x[0], parts.y[0])
+print(parts.x[1], parts.y[1])
+print(parts.x[2], parts.y[2])
+total_x = 0.0
+for i in parts:
+    total_x += parts.x[i]
+print(total_x)
+parts.clear()
+print(len(parts))

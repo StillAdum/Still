@@ -1,0 +1,16 @@
+[package]
+name = "still"
+version = "0.2.0"
+edition = "2021"
+description = "Still programming language compiler"
+
+[lib]
+name = "still"
+path = "src/lib.rs"
+
+[[bin]]
+name = "still"
+path = "src/bin/still.rs"
+
+[profile.release]
+opt-level = 2

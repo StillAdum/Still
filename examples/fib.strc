@@ -1,0 +1,10 @@
+func fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+t0 = clock()
+result = fib(30)
+elapsed = clock() - t0
+print("fib(30) = {result}")
+print("took {elapsed} seconds")

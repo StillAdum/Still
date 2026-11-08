@@ -1,0 +1,15 @@
+a = 255
+b = 0xff
+c = 0b1010
+d = 1_000_000
+e = 3.5
+f = 2.0
+g = 1e3
+h = true
+i = false
+j = "with \"quotes\" and \t tab"
+print(a, b, c, d)
+print(e, f, g)
+print(h, i)
+print(j)
+print(type_of(a), type_of(e), type_of(j), type_of(h))

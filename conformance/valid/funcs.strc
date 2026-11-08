@@ -1,0 +1,38 @@
+func add(a, b):
+    return a + b
+
+print(add(2, 3))
+print(add(1.5, 2.5))
+print(add("foo", "bar"))
+
+func greet(name, greeting = "hi"):
+    return "{greeting}, {name}!"
+
+print(greet("still"))
+print(greet("still", "yo"))
+
+func square(x: int) -> int:
+    return x * x
+
+print(square(9))
+
+func early(n):
+    if n > 0:
+        return "pos"
+    else:
+        return "neg"
+
+print(early(5), early(-5))
+
+func no_return():
+    pass
+
+no_return()
+print(type_of(no_return()))
+
+fib29 = fib(12)
+print(fib29)
+func fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)

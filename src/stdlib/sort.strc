@@ -1,0 +1,38 @@
+func _part(a, lo: int, hi: int) -> int:
+    p = a[hi]
+    i = lo - 1
+    j = lo
+    while j < hi:
+        if a[j] < p:
+            i += 1
+            a[i], a[j] = a[j], a[i]
+        j += 1
+    a[i + 1], a[hi] = a[hi], a[i + 1]
+    return i + 1
+
+func _quicksort(a, lo: int, hi: int):
+    if lo < hi:
+        p = _part(a, lo, hi)
+        _quicksort(a, lo, p - 1)
+        _quicksort(a, p + 1, hi)
+
+func sort(a):
+    if len(a) < 2:
+        return a
+    _quicksort(a, 0, len(a) - 1)
+    return a
+
+func sorted(a):
+    copy = a[:]
+    return sort(copy)
+
+func reversed_copy(a):
+    out = []
+    for x in a:
+        push(out, x)
+    n = len(out)
+    i = 0
+    while i < n / 2:
+        out[i], out[n - 1 - i] = out[n - 1 - i], out[i]
+        i += 1
+    return out

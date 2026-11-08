@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build still.exe
+        run: cargo build --release
+
+      - name: Conformance suite on MSVC
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:PATH;$pwd\target\release"
+          still version
+          still test conformance
+
+      - name: Run every example on MSVC
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:PATH;$pwd\target\release"
+          foreach ($f in Get-ChildItem examples\*.strc) {
+            Write-Host "== $($f.Name)"
+            still run $f.FullName | Out-Null
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: Package Windows zip
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          New-Item -ItemType Directory -Force -Path pkg | Out-Null
+          Copy-Item target\release\still.exe pkg\
+          Copy-Item SETUP-WINDOWS.md pkg\
+          Copy-Item install.ps1 pkg\
+          Copy-Item uninstall.ps1 pkg\
+          Copy-Item -Recurse examples pkg\examples
+          Compress-Archive -Path pkg\* -DestinationPath "still-$tag-windows-x64.zip"
+
+      - name: Package VS Code extension
+        working-directory: vscode
+        run: npx --yes @vscode/vsce package
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "still-$tag-windows-x64.zip"
+          $vsix = (Get-ChildItem vscode -Filter *.vsix | Select-Object -First 1).FullName
+          if (-not (gh release view $tag)) {
+            gh release create $tag --title "Still $tag" --notes-file RELEASE_NOTES.md
+          }
+          gh release upload $tag $zip $vsix --clobber

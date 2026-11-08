@@ -1,0 +1,8 @@
+name = "world"
+print("hello, {name}!")
+
+func greet(name, greeting = "hi"):
+    return "{greeting}, {name}!"
+
+print(greet("still"))
+print(greet("lang", "welcome"))

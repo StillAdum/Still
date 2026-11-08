@@ -1,0 +1,8 @@
+func now() -> float:
+    return clock()
+
+func since(t: float) -> float:
+    return clock() - t
+
+func sleep(seconds: float):
+    sleep_ms(int(seconds * 1000.0))

@@ -1,0 +1,3 @@
+name = "still"
+print("hello, {name}!")
+print("hello,", "world", 42)

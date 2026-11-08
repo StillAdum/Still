@@ -1,0 +1,17 @@
+use math
+use sort
+use random
+
+print("pi is {math.pi}")
+print("sqrt(2) = {math.sqrt(2.0)}")
+
+nums = [42, 7, 19, 3, 88, 1]
+sort.sort(nums)
+print("sorted: {nums}")
+
+seed(1234)
+print("dice: {random.rand_range(1, 6)} {random.rand_range(1, 6)} {random.rand_range(1, 6)}")
+
+use math: gcd, clamp
+print("gcd(270, 192) = {gcd(270, 192)}")
+print("clamp(150, 0, 100) = {clamp(150.0, 0.0, 100.0)}")

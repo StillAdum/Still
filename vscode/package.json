@@ -1,0 +1,127 @@
+{
+  "name": "still-lang",
+  "displayName": "Still",
+  "description": "Still programming language support: syntax highlighting, autocomplete, errors, run and debug",
+  "version": "0.2.0",
+  "publisher": "still-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/StillAdum/Still"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": ["Programming Languages", "Debuggers"],
+  "activationEvents": ["onLanguage:still"],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "still",
+        "aliases": ["Still"],
+        "extensions": [".strc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "still",
+        "scopeName": "source.still",
+        "path": "./syntaxes/still.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "still.runFile",
+        "title": "Still: Run File",
+        "icon": "$(play)"
+      },
+      {
+        "command": "still.debugFile",
+        "title": "Still: Debug File",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "still.checkFile",
+        "title": "Still: Check File"
+      },
+      {
+        "command": "still.showSetup",
+        "title": "Still: Show Compiler Setup Instructions"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "still.runFile",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus && editorLangId == still"
+      },
+      {
+        "command": "still.debugFile",
+        "key": "f5",
+        "when": "editorTextFocus && editorLangId == still && !inDebugMode"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "still.runFile", "when": "editorLangId == still", "group": "still@1" },
+        { "command": "still.debugFile", "when": "editorLangId == still", "group": "still@2" }
+      ],
+      "editor/title/run": [
+        { "command": "still.runFile", "when": "editorLangId == still", "group": "navigation@1" },
+        { "command": "still.debugFile", "when": "editorLangId == still", "group": "navigation@2" }
+      ]
+    },
+    "debuggers": [
+      {
+        "type": "still",
+        "label": "Still Debug",
+        "languages": ["still"],
+        "program": "./dap.js",
+        "runtime": "node",
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": { "type": "string", "description": "Path to the .strc file" },
+              "release": { "type": "boolean", "description": "Build with optimizations (default false)", "default": false },
+              "args": { "type": "array", "items": { "type": "string" }, "default": [] }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "still",
+            "request": "launch",
+            "name": "Run and debug Still file",
+            "program": "${file}"
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Still",
+      "properties": {
+        "still.compilerPath": {
+          "type": "string",
+          "default": "still",
+          "description": "Path to the still compiler binary"
+        },
+        "still.diagnosticsOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the file for errors when it is saved or opened"
+        },
+        "still.diagnosticsOnType": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the file for errors as you type (300 ms delay)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check": "node --check extension.js && node --check dap.js"
+  }
+}

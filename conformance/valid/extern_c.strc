@@ -1,0 +1,12 @@
+extern "C":
+    func sqrt(x: float) -> float
+    func fabs(x: float) -> float
+    func pow(x: float, y: float) -> float
+    func printf(fmt: str, ...) -> int
+
+print(sqrt(16.0))
+print(fabs(-3.5))
+print(pow(2.0, 8.0))
+printf("hello from C: %ld\n", 123)
+n = printf("counted %ld and %ld\n", 1, 2)
+print(n)

@@ -1,0 +1,31 @@
+type Player:
+    name: str
+    score: int
+
+players = [
+    Player("ana", 91),
+    Player("bo", 78),
+    Player("cy", 85),
+]
+
+best = players[0]
+for p in players:
+    if p.score > best.score:
+        best = p
+print("best: {best.name} with {best.score}")
+
+scores = []
+for p in players:
+    scores.push(p.score)
+print("all: {scores}")
+print("min {min(scores)} max {max(scores)} avg {sum(scores) / len(scores)}")
+
+by_name = {}
+for p in players:
+    by_name[p.name] = p.score
+print("by name: {by_name}")
+
+grid = [[1, 2, 3], [4, 5, 6]]
+grid[0][2] = 99
+print("grid: {grid}")
+print("cell: {grid[0][2]}")

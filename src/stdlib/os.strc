@@ -1,0 +1,11 @@
+func env(name: str, fallback: str = "") -> str:
+    v = get_env(name)
+    if v is not none:
+        return v
+    return fallback
+
+func run_cmd(cmd: str) -> int:
+    return system(cmd)
+
+extern "C":
+    func system(cmd: str) -> int

@@ -1,0 +1,25 @@
+pass
+x = 1
+if x:
+    pass
+else:
+    pass
+definitely = "unicode ident ünïcødé works"
+print(definitely)
+shadow = 1
+if true:
+    shadow = 2
+    print(shadow)
+print(shadow)
+empty_list: [str] = []
+print(len(empty_list))
+deep = ((((1 + 2))))
+print(deep)
+one_liner = 5; print(one_liner)
+big = 9007199254740993
+print(big - 9007199254740992)
+nested = {"outer": [[9, 8], [7, 6]]}
+print(nested["outer"][1][0])
+multi = 1 + \
+    2
+print(multi)

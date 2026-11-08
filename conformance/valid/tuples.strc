@@ -1,0 +1,23 @@
+a, b = 1, 2
+print(a, b)
+a, b = b, a
+print(a, b)
+t = (10, "x", 3.5)
+print(t.0, t.1, t.2)
+for i, n in enumerate([5, 6, 7]):
+    print(i, n)
+func minmax(nums):
+    lo = nums[0]
+    hi = nums[0]
+    for n in nums:
+        if n < lo:
+            lo = n
+        if n > hi:
+            hi = n
+    return lo, hi
+lo, hi = minmax([4, 9, 2, 7])
+print(lo, hi)
+x, y = point()
+print(x, y)
+func point() -> (int, int):
+    return 3, 4

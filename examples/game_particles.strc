@@ -1,0 +1,22 @@
+@soa type Particle:
+    x: float
+    y: float
+    vx: float
+    vy: float
+
+use math
+
+parts = Particle(1000)
+for i in range(1000):
+    parts.push(0.0, 0.0, sin(float(i) / 100.0), cos(float(i) / 100.0))
+
+dt = 0.016
+t0 = clock()
+frames = 120
+for frame in range(frames):
+    for i in parts:
+        parts.x[i] = parts.x[i] + parts.vx[i] * dt
+        parts.y[i] = parts.y[i] + parts.vy[i] * dt
+elapsed = clock() - t0
+print("updated {frames} frames of {len(parts)} particles in {elapsed}s")
+print("sample: {parts.x[0]} {parts.y[0]}")

@@ -1,0 +1,24 @@
+x: int? = none
+print(x)
+print(x is none)
+print(x is not none)
+if x is none:
+    x = 42
+print(x)
+if x:
+    print("x is {x}")
+name: str? = get_name()
+if name is not none:
+    print("hello {name}")
+else:
+    print("no name")
+def_name = name or "anon"
+print(def_name)
+y = none
+if y is none:
+    print("y none")
+lookup = {"k": 1}
+missing = get_name()
+print(missing is none)
+func get_name() -> str?:
+    return none
