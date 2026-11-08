@@ -114,11 +114,13 @@ cargo test --release
 
 ## Windows release notes (v0.2.0, how it ships)
 
-- Repo: github.com/StillAdum/Still (delete+recreated fresh, single squashed commit, tag v0.2.0).
+- Repo: github.com/StillAdum/Still (delete+recreated fresh, tag v0.2.0 on the Windows-fix commit; release pipeline verified end-to-end).
 - Release = GitHub Release on tag: body from RELEASE_NOTES.md, assets still-v0.2.0-windows-x64.zip + still-lang-0.2.0.vsix, built by release.yml on windows-latest.
 - zip layout: still.exe, install.ps1 (copies to %LOCALAPPDATA%\Programs\Still, user PATH), uninstall.ps1, SETUP-WINDOWS.md, examples/.
 - End user needs VS Build Tools (C++ workload) or WinLibs gcc; still finds them itself (vswhere fallback when cl is not on PATH — works from any terminal, no dev prompt needed).
 - MSVC gotchas fixed: __builtin overflow shims; cl objs go to tmp dir; /Fe forced absolute; vcvars wrapped in a generated .bat (quoting: never put trailing-backslash paths before a closing quote in bat/cmd lines — MSVCRT eats \" ).
+- CRLF plague (found by the first release CI run): git checkout on Windows CRLF'd everything. Fixes: (a) load_module strips BOM + normalizes \r\n before lexing (end-user CRLF files work; verified with all-CRLF conformance tree, 38/38); (b) .gitattributes `* text=auto eol=lf`; (c) test_dir compares expected vs stdout with \r\n normalized on BOTH sides (MSVC translates \n→\r\n in piped stdout — that's why multi-line tests "passed" before: both sides were CRLF); (d) conformance programs run with current_dir=tmp build dir, so io_file.strc uses a relative temp filename (v0.2 hardcoded /tmp → fopen fail → panic abort → exit -1073740791 on Windows).
+- CI false-green gotcha: GH pwsh wrapper propagates ONLY the last native command's exit code — the first windows CI "passed" with failing conformance because the examples loop reset $LASTEXITCODE. Every critical command in pwsh steps needs `if ($LASTEXITCODE -ne 0) { exit 1 }` right after it.
 - Doc gotcha learned: methods CANNOT mutate self (structs are values, self is a copy) — the idiom is `p = p.hurt(30)` returning a new struct; SETUP-WINDOWS.md sample is compiler-verified.
 - Deleted v0.1 leftovers: conformance/py (old-syntax pyinterop, did not compile), examples_dbg (old Rust scratch).
 
