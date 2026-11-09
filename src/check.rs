@@ -575,6 +575,7 @@ impl Checker {
                             BinOp::FloorDiv => (a / b).floor(),
                             BinOp::Mod => a - b * (a / b).floor(),
                             BinOp::Pow => a.powf(b),
+                            _ => return None,
                         };
                         X::Float(v)
                     }
@@ -591,6 +592,7 @@ impl Checker {
                             BinOp::FloorDiv => (a / b).floor(),
                             BinOp::Mod => a - b * (a / b).floor(),
                             BinOp::Pow => a.powf(b),
+                            _ => return None,
                         };
                         X::Float(v)
                     }
@@ -607,6 +609,7 @@ impl Checker {
                             BinOp::FloorDiv => (a / b).floor(),
                             BinOp::Mod => a - b * (a / b).floor(),
                             BinOp::Pow => a.powf(b),
+                            _ => return None,
                         };
                         X::Float(v)
                     }
@@ -1403,7 +1406,7 @@ impl Checker {
                     if ctx.lookup(base).is_none() {
                         // Static method on a type itself: Length.from_km(5.0)
                         if let Some(qual) = self.short_types.get(&module).and_then(|s| s.get(base)).cloned() {
-                            let mkey = format!("{}.{}", qual.split("::").next_back().unwrap_or(base), mname);
+                            let mkey = format!("{}.{}", qual.split("::").nth(1).unwrap_or(base), mname);
                             if self.funcs.contains_key(&(module.clone(), mkey.clone())) {
                                 let mut ax = Vec::new();
                                 for a in args {

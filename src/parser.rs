@@ -1545,6 +1545,12 @@ pub fn p_str(p: &crate::lexer::P) -> &'static str {
         Le => "<=",
         Gt => ">",
         Ge => ">=",
+        LSL => "<<",
+        RSr => ">>",
+        Band => "&",
+        Bor => "|",
+        Bxor => "^",
+        Tilde => "~",
         Question => "?",
         At => "@",
     }
