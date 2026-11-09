@@ -27,6 +27,27 @@ fn examples_run() {
 }
 
 #[test]
+fn stdlib_modules_typecheck() {
+    let tmp = std::env::temp_dir().join("still_std_check");
+    std::fs::create_dir_all(&tmp).expect("tmpdir");
+    let mut failures = Vec::new();
+    for (name, _src) in still::std_modules() {
+        let main = tmp.join(format!("std_{}.strc", name));
+        std::fs::write(&main, format!("use {}\nprint('unused')\n", name)).unwrap();
+        match still::compile_to_c(&main, false) {
+            Ok(out) if out.diags.is_empty() => {}
+            Ok(out) => failures.push(format!(
+                "{}: {:?}",
+                name,
+                out.diags.iter().map(|d| d.to_string()).collect::<Vec<_>>()
+            )),
+            Err(e) => failures.push(format!("{}: {}", name, e)),
+        }
+    }
+    assert!(failures.is_empty(), "stdlib failures:\n{}", failures.join("\n---\n"));
+}
+
+#[test]
 fn release_mode_still_fast() {
     let main = std::env::temp_dir().join("still_bench_check.strc");
     std::fs::write(&main, "func fib(n):\n    if n < 2:\n        return n\n    return fib(n - 1) + fib(n - 2)\nprint(fib(28))\n").unwrap();
