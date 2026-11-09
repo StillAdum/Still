@@ -1285,6 +1285,17 @@ impl Checker {
                 if self.externs.contains_key(name) {
                     return self.extern_call(name, ax, sp);
                 }
+                // `use other` makes that module's public types/functions reachable without qualification
+                if let Some(als) = self.aliases.get(&module).cloned() {
+                    for target in als.values() {
+                        if let Some(qual) = self.short_types.get(target).and_then(|s| s.get(name)).cloned() {
+                            return self.ctor(&qual, ax, sp);
+                        }
+                        if self.funcs.contains_key(&(target.clone(), name.clone())) {
+                            return self.call_fn(ctx, target, name, ax, sp);
+                        }
+                    }
+                }
                 match self.builtin_call(ctx, name, ax, sp) {
                     BR::Yes(Some(t)) => return Some(t),
                     BR::Yes(None) => return None,
