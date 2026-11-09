@@ -281,7 +281,7 @@ impl Checker {
                 }
                 if let Some(d) = &f.default {
                     match self.const_eval(d) {
-                        Some(cv) if assign_ok(&cv.ty, &ty).is_some() => defaults.push(Some(cv)),
+                        Some(cv) if assign_ok(&cv.ty, &ty).is_some() || coerce_holes(&cv.ty, &ty) => defaults.push(Some(cv)),
                         Some(_) => {
                             self.diags.push(err(&f.span, format!("default for field '{}' does not match its type {}", f.name, ty_name(&ty))));
                             defaults.push(None);
@@ -450,7 +450,7 @@ impl Checker {
             if ty.is_some() && p.default.is_some() {
                 let cv = self.const_eval(p.default.as_ref().unwrap());
                 match cv {
-                    Some(cv) if assign_ok(&cv.ty, ty.as_ref().unwrap()).is_some() => pdefs.push(Some(cv)),
+                    Some(cv) if assign_ok(&cv.ty, ty.as_ref().unwrap()).is_some() || coerce_holes(&cv.ty, ty.as_ref().unwrap()) => pdefs.push(Some(cv)),
                     _ => {
                         self.diags.push(err(&p.span, "default values must be constants matching the parameter type".into()));
                         pdefs.push(None);
@@ -1459,7 +1459,7 @@ impl Checker {
         for i in 0..n {
             let (fname, fty) = si.fields[i].clone();
             if i < args.len() {
-                if assign_ok(&args[i].ty, &fty).is_none() {
+                if assign_ok(&args[i].ty, &fty).is_none() && !coerce_holes(&args[i].ty, &fty) {
                     self.diags.push(err(&args[i].span, format!("field '{}' of {} wants {}, got {}", fname, si.name, ty_name(&fty), ty_name(&args[i].ty))));
                     return None;
                 }
@@ -1886,7 +1886,7 @@ impl Checker {
                     return None;
                 }
                 for (i, (fname, fty)) in si.fields.iter().enumerate() {
-                    if assign_ok(&args[i].ty, fty).is_none() {
+                    if assign_ok(&args[i].ty, fty).is_none() && !coerce_holes(&args[i].ty, fty) {
                         self.diags.push(err(&args[i].span, format!("field '{}' wants {}, got {}", fname, ty_name(fty), ty_name(&args[i].ty))));
                         return None;
                     }
@@ -1916,6 +1916,50 @@ fn assign_ok(src: &Ty, dst: &Ty) -> Option<&'static str> {
         (Ty::NoneTy, Ty::NoneTy) => Some("same"),
         (_, Ty::Nullable(inner)) if ty_eq(&s, inner) => Some("box"),
         _ => None,
+    }
+}
+
+/// Fill an inference hole: a bare empty container literal carries an unbound
+/// type variable for its element type. Adopt `want` into it when it is anything
+/// concrete. Returns true when the source now fits the destination.
+fn bind_hole(hole: &Rc<Ty>, want: &Rc<Ty>) -> bool {
+    let cell = match &**hole {
+        Ty::Var(cell) => cell.clone(),
+        _ => return false,
+    };
+    let free = cell.borrow().is_none();
+    if !free {
+        return false;
+    }
+    let w = resolve(want);
+    match w {
+        Ty::Var(_) => false,
+        w => {
+            *cell.borrow_mut() = Some(w);
+            true
+        }
+    }
+}
+
+/// When a check fails structurally, let bare `[]` / `{}` literals (whose
+/// element/key/value types are still unbound variables) adopt the destination
+/// container's types, then report success.
+fn coerce_holes(src: &Ty, dst: &Ty) -> bool {
+    let s = resolve(src);
+    let d = resolve(dst);
+    match (&s, &d) {
+        (Ty::List(a), Ty::List(b)) => bind_hole(a, b) || bind_hole(b, a),
+        (Ty::Dict(ak, av), Ty::Dict(bk, bv)) => {
+            (bind_hole(ak, bk) || bind_hole(bk, ak)) && (bind_hole(av, bv) || bind_hole(bv, av))
+        }
+        (Ty::Tuple(xs), Ty::Tuple(ws)) => {
+            xs.len() == ws.len()
+                && xs.iter().zip(ws.iter()).all(|(x, w)| match (resolve(x), resolve(w)) {
+                    (Ty::List(a), Ty::List(b)) => bind_hole(&a, &b),
+                    _ => false,
+                })
+        }
+        _ => false,
     }
 }
 
@@ -1989,7 +2033,7 @@ impl Checker {
         }
         let new = resolve(&t);
         if ctx.ret_annotated {
-            if assign_ok(&new, &cur).is_none() {
+            if assign_ok(&new, &cur).is_none() && !coerce_holes(&new, &cur) {
                 self.diags.push(err(sp, format!("this returns {} but the function is declared to return {}", ty_name(&new), ty_name(&cur))));
             }
             return;
@@ -2055,7 +2099,7 @@ impl Checker {
                 Some(t) => {
                     if !eager {
                         let arg_ty = if i < args.len() { args[i].ty.clone() } else { pdefs[i].as_ref().unwrap().ty.clone() };
-                        if assign_ok(&arg_ty, t).is_none() {
+                        if assign_ok(&arg_ty, t).is_none() && !coerce_holes(&arg_ty, t) {
                             self.diags.push(err(sp, format!("argument {} of '{}' ('{}') wants {}, got {}", i + 1, fname, fd.params[i].name, ty_name(t), ty_name(&arg_ty))));
                             return None;
                         }
@@ -2566,7 +2610,7 @@ impl Checker {
                             }
                         }
                     }
-                    if assign_ok(&vt.ty, &cur).is_none() {
+                    if assign_ok(&vt.ty, &cur).is_none() && !coerce_holes(&vt.ty, &cur) {
                         let hint = if matches!(resolve(&vt.ty), Ty::NoneTy) {
                             format!(" (to allow none, declare it as {}: {}? = none)", name, ty_name(&cur))
                         } else {
@@ -2595,7 +2639,7 @@ impl Checker {
                             }
                         }
                     }
-                    if assign_ok(&vt.ty, &cur).is_none() {
+                    if assign_ok(&vt.ty, &cur).is_none() && !coerce_holes(&vt.ty, &cur) {
                         self.diags.push(err(&vt.span, format!("cannot assign {} to '{}' which holds {}", ty_name(&vt.ty), name, ty_name(&cur))));
                         return None;
                     }
@@ -2610,7 +2654,7 @@ impl Checker {
                             return None;
                         }
                     };
-                    let fits = self.deep_compat(&vt.ty, &aty) || assign_ok(&vt.ty, &aty).is_some();
+                    let fits = self.deep_compat(&vt.ty, &aty) || assign_ok(&vt.ty, &aty).is_some() || coerce_holes(&vt.ty, &aty);
                     if !matches!(resolve(&vt.ty), Ty::Never) && !fits {
                         self.diags.push(err(&vt.span, format!("cannot assign {} to '{}' which is declared as {}", ty_name(&vt.ty), name, ty_name(&aty))));
                         return None;
@@ -2747,7 +2791,7 @@ impl Checker {
                 let _ = nsp;
             }
             let (place, pty) = self.check_target(ctx, t)?;
-            if assign_ok(&item_tx.ty, &pty).is_none() {
+            if assign_ok(&item_tx.ty, &pty).is_none() && !coerce_holes(&item_tx.ty, &pty) {
                 self.diags.push(err(&item_tx.span, format!("cannot assign {} to '{}' which holds {}", ty_name(&item_tx.ty), expr_name(t), ty_name(&pty))));
                 return None;
             }
