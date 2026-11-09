@@ -322,7 +322,7 @@ pub fn setup_cc() -> Result<PathBuf, String> {
             // ~/.still/lib (tcc finds libtcc1 via its ../lib/tcc relative path).
             let root = bin_dir.parent().unwrap_or(&bin_dir).display().to_string();
             let dl = format!(
-                "curl -fsSLf '{u}' -o 'r/tcc-setup.tar.gz' && tar xzf 'r/tcc-setup.tar.gz' -C 'r' --no-same-owner && rm -f 'r/tcc-setup.tar.gz'",
+                "curl -fsSLf '{u}' -o '{r}/tcc-setup.tar.gz' && tar xzf '{r}/tcc-setup.tar.gz' -C '{r}' --no-same-owner && rm -f '{r}/tcc-setup.tar.gz'",
                 u = url,
                 r = root
             );
