@@ -7,7 +7,7 @@ type PlatformServices:
     platform_name: str = "Standalone"
     user_id: str = "local_player"
     user_name: str = "Player"
-    achievements: [Achievement] = []
+    achievements: [Achievement]
 
     func unlock_achievement(self, id: str) -> bool:
         for a in self.achievements:
@@ -22,3 +22,6 @@ type PlatformServices:
             if a.id == id:
                 return a.unlocked
         return false
+
+func make_platform_services() -> PlatformServices:
+    return PlatformServices("Standalone", "local_player", "Player", [])

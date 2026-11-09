@@ -7,7 +7,7 @@ type ModManifest:
     enabled: bool = true
 
 type ModManager:
-    mods: [ModManifest] = []
+    mods: [ModManifest]
 
     func register_mod(self, id: str, name: str, ver: str, entry: str):
         push(self.mods, ModManifest(id, name, ver, "author", entry, true))
@@ -18,3 +18,6 @@ type ModManager:
             if m.enabled:
                 push(res, m)
         return res
+
+func make_mod_manager() -> ModManager:
+    return ModManager([])

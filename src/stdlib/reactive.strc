@@ -21,7 +21,7 @@ type Signal:
         return was_dirty
 
 type ReactiveStore:
-    signals: [Signal] = []
+    signals: [Signal]
 
     func create_signal(self, id: str, init_val: float = 0.0) -> Signal:
         sig = Signal(id, "", init_val, false, 0)
@@ -33,3 +33,6 @@ type ReactiveStore:
             if s.id == id:
                 return s
         return Signal("none", "", 0.0, false, 0)
+
+func make_reactive_store() -> ReactiveStore:
+    return ReactiveStore([])

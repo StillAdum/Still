@@ -8,7 +8,7 @@ type InputAction:
 
 type InputContext:
     name: str
-    actions: [InputAction] = []
+    actions: [InputAction]
 
     func bind_action(self, name: str, key: str):
         push(self.actions, InputAction(name, key, false, false))
@@ -19,10 +19,12 @@ type InputContext:
                 return a.was_pressed
         return false
 
+func make_input_context(name: str) -> InputContext:
+    return InputContext(name, [])
+
 func apply_deadzone(x: float, y: float, deadzone: float = 0.15) -> (float, float):
     mag = sqrt(x * x + y * y)
     if mag < deadzone:
         return (0.0, 0.0)
-    # rescale
     scale = (mag - deadzone) / (1.0 - deadzone)
     return (x / mag * scale, y / mag * scale)

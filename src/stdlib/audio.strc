@@ -16,7 +16,7 @@ type AudioListener:
 
 type AudioMixer:
     listener: AudioListener
-    sources: [SoundSource] = []
+    sources: [SoundSource]
     master_volume: float = 1.0
 
     func set_listener(self, x: float, y: float, z: float):
@@ -28,17 +28,19 @@ type AudioMixer:
         return src
 
     func calculate_spatial(self, src: SoundSource) -> (float, float):
-        # returns (pan: -1.0 to 1.0, volume: 0.0 to 1.0)
         diff = src.pos.sub(self.listener.pos)
         dist = diff.length()
         if dist < 0.1:
             dist = 0.1
         attenuation = 1.0 / (1.0 + 0.1 * dist)
         vol = src.volume * attenuation * self.master_volume
-        # calculate pan based on listener right vector
         right = self.listener.forward.cross(self.listener.up)
         pan = diff.normalized().dot(right)
         return (pan, vol)
+
+func make_audio_mixer() -> AudioMixer:
+    lst = AudioListener(Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, -1.0), Vec3(0.0, 1.0, 0.0))
+    return AudioMixer(lst, [], 1.0)
 
 func synth_sine_wave(freq: float, duration_secs: float, sample_rate: int = 44100) -> [float]:
     samples = []
@@ -53,7 +55,6 @@ func synth_noise(duration_secs: float, sample_rate: int = 44100) -> [float]:
     samples = []
     total_samples = int(duration_secs * float(sample_rate))
     for i in range(total_samples):
-        # deterministic pseudo noise between -1.0 and 1.0
         val = float((i * 1103515245 + 12345) % 65536) / 32768.0 - 1.0
         push(samples, val)
     return samples

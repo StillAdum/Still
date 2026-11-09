@@ -32,7 +32,7 @@ type Contact2D:
     penetration: float
 
 type World2D:
-    bodies: [Body2D] = []
+    bodies: [Body2D]
     gravity_x: float = 0.0
     gravity_y: float = -9.81
 
@@ -45,7 +45,6 @@ type World2D:
         for b in self.bodies:
             b.integrate(dt, self.gravity_x, self.gravity_y)
 
-        # resolve collisions
         n = len(self.bodies)
         for i in range(n):
             for j in range(i + 1, n):
@@ -61,7 +60,6 @@ type World2D:
                     ny = dy / dist
                     overlap = min_dist - dist
                     
-                    # positional correction
                     total_inv = b1.inv_mass + b2.inv_mass
                     if total_inv > 0.0:
                         if not b1.static_body:
@@ -71,7 +69,6 @@ type World2D:
                             b2.x = b2.x + nx * overlap * (b2.inv_mass / total_inv)
                             b2.y = b2.y + ny * overlap * (b2.inv_mass / total_inv)
 
-                        # relative velocity
                         rvx = b2.vx - b1.vx
                         rvy = b2.vy - b1.vy
                         vel_along_normal = rvx * nx + rvy * ny
@@ -80,3 +77,6 @@ type World2D:
                             j = -(1.0 + restit) * vel_along_normal / total_inv
                             b1.apply_impulse(-nx * j, -ny * j)
                             b2.apply_impulse(nx * j, ny * j)
+
+func make_world_2d(gx: float = 0.0, gy: float = -9.81) -> World2D:
+    return World2D([], gx, gy)

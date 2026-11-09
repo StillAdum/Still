@@ -15,14 +15,13 @@ type Keyframe:
 type AnimationClip:
     name: str
     duration: float
-    keyframes: [Keyframe] = []
+    keyframes: [Keyframe]
 
     func sample_pos(self, t: float) -> Vec3:
         if len(self.keyframes) == 0:
             return Vec3(0.0, 0.0, 0.0)
         if len(self.keyframes) == 1:
             return self.keyframes[0].pos
-        # find pair
         for i in range(len(self.keyframes) - 1):
             k1 = self.keyframes[i]
             k2 = self.keyframes[i + 1]
@@ -34,3 +33,6 @@ type AnimationClip:
                     k1.pos.z + (k2.pos.z - k1.pos.z) * factor
                 )
         return self.keyframes[len(self.keyframes) - 1].pos
+
+func make_animation_clip(name: str, duration: float) -> AnimationClip:
+    return AnimationClip(name, duration, [])

@@ -6,7 +6,6 @@ func levenshtein(s1: str, s2: str) -> int:
     if n == 0:
         return m
 
-    # previous and current row of distances
     v0 = []
     v1 = []
     for i in range(n + 1):
@@ -46,7 +45,7 @@ type TextRopeNode:
     weight: int
 
 type TextRope:
-    nodes: [TextRopeNode] = []
+    nodes: [TextRopeNode]
 
     func append(self, s: str):
         push(self.nodes, TextRopeNode(s, len(s)))
@@ -56,3 +55,6 @@ type TextRope:
         for n in self.nodes:
             res = res + n.text
         return res
+
+func make_text_rope() -> TextRope:
+    return TextRope([])

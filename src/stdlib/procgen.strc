@@ -3,12 +3,12 @@ use random
 type WfcTile:
     id: int
     name: str
-    allowed_neighbors: [int] = []
+    allowed_neighbors: [int]
 
 type WfcGrid:
     width: int
     height: int
-    cells: [int] = []
+    cells: [int]
 
     func init_grid(self, default_val: int = -1):
         self.cells = []
@@ -29,6 +29,9 @@ type DungeonRoom:
     y: int
     w: int
     h: int
+
+func make_wfc_grid(w: int, h: int) -> WfcGrid:
+    return WfcGrid(w, h, [])
 
 func generate_bsp_dungeon(width: int, height: int, num_rooms: int = 4) -> [DungeonRoom]:
     rooms = []

@@ -8,8 +8,8 @@ type Slot:
     value: str = ""
 
 type SlotMap:
-    slots: [Slot] = []
-    free_indices: [int] = []
+    slots: [Slot]
+    free_indices: [int]
 
     func insert(self, val: str) -> Handle:
         idx = -1
@@ -41,3 +41,6 @@ type SlotMap:
                 push(self.free_indices, h.index)
                 return true
         return false
+
+func make_slot_map() -> SlotMap:
+    return SlotMap([], [])

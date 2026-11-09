@@ -18,7 +18,7 @@ type UI:
     mouse_down: bool = false
     hot_id: str = ""
     active_id: str = ""
-    commands: [DrawCmd] = []
+    commands: [DrawCmd]
 
     func begin_frame(self, mx: float, my: float, mdown: bool):
         self.cursor_x = 10.0
@@ -31,7 +31,8 @@ type UI:
     func end_frame(self) -> [DrawCmd]:
         return self.commands
 
-    func label(self, text: str, col: Color = Color(1.0, 1.0, 1.0, 1.0)):
+    func label(self, text: str):
+        col = Color(1.0, 1.0, 1.0, 1.0)
         cmd = DrawCmd("text", self.cursor_x, self.cursor_y, 0.0, 20.0, text, col)
         push(self.commands, cmd)
         self.cursor_y = self.cursor_y + 24.0
@@ -114,7 +115,13 @@ type Window:
     y: float = 50.0
     w: float = 300.0
     h: float = 200.0
-    widgets: [Widget] = []
+    widgets: [Widget]
 
     func add_widget(self, w: Widget):
         push(self.widgets, w)
+
+func make_ui() -> UI:
+    return UI(10.0, 10.0, 8.0, 0.0, 0.0, false, "", "", [])
+
+func make_window(title: str, x: float = 50.0, y: float = 50.0, w: float = 300.0, h: float = 200.0) -> Window:
+    return Window(title, x, y, w, h, [])

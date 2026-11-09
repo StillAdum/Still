@@ -1,7 +1,6 @@
 type HttpRequest:
     method: str
     path: str
-    headers: {str: str}
     body: str
 
 type HttpResponse:
@@ -26,7 +25,7 @@ type Route:
 
 type WebServer:
     port: int = 8080
-    routes: [Route] = []
+    routes: [Route]
 
     func route(self, method: str, path: str, handler_id: str):
         push(self.routes, Route(method, path, handler_id))
@@ -37,6 +36,9 @@ type WebServer:
                 return HttpResponse(200, "OK", "application/json", "{\"status\":\"ok\",\"handler\":\"{r.handler_id}\"}")
         return HttpResponse(404, "Not Found", "text/plain", "404 Not Found")
 
+func make_web_server(port: int = 8080) -> WebServer:
+    return WebServer(port, [])
+
 func parse_http_request(raw: str) -> HttpRequest:
     lines = raw.split("\r\n")
     if len(lines) == 0 or lines[0] == "":
@@ -44,5 +46,5 @@ func parse_http_request(raw: str) -> HttpRequest:
     if len(lines) > 0:
         first = lines[0].split(" ")
         if len(first) >= 2:
-            return HttpRequest(first[0], first[1], {}, "")
-    return HttpRequest("GET", "/", {}, "")
+            return HttpRequest(first[0], first[1], "")
+    return HttpRequest("GET", "/", "")

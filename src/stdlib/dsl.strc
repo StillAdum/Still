@@ -1,7 +1,7 @@
 type ShaderBuilder:
-    vertex_inputs: [str] = []
-    uniforms: [str] = []
-    main_body: [str] = []
+    vertex_inputs: [str]
+    uniforms: [str]
+    main_body: [str]
 
     func add_input(self, name: str, ty: str):
         push(self.vertex_inputs, "layout(location = {len(self.vertex_inputs)}) in {ty} {name};")
@@ -26,8 +26,8 @@ type ShaderBuilder:
 
 type SqlBuilder:
     table_name: str
-    selected_cols: [str] = []
-    where_clauses: [str] = []
+    selected_cols: [str]
+    where_clauses: [str]
 
     func select(self, col: str):
         push(self.selected_cols, col)
@@ -51,3 +51,9 @@ type SqlBuilder:
                     q = q + " AND "
                 q = q + self.where_clauses[i]
         return q + ";"
+
+func make_shader_builder() -> ShaderBuilder:
+    return ShaderBuilder([], [], [])
+
+func make_sql_builder(table: str) -> SqlBuilder:
+    return SqlBuilder(table, [], [])

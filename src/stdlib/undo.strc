@@ -5,15 +5,14 @@ type Action:
     next_val: str
 
 type UndoHistory:
-    undo_stack: [Action] = []
-    redo_stack: [Action] = []
+    undo_stack: [Action]
+    redo_stack: [Action]
     max_history: int = 100
 
     func execute(self, act: Action):
         push(self.undo_stack, act)
         self.redo_stack = []
         if len(self.undo_stack) > self.max_history:
-            # trim oldest
             next_stack = []
             for i in range(1, len(self.undo_stack)):
                 push(next_stack, self.undo_stack[i])
@@ -36,3 +35,6 @@ type UndoHistory:
         act = pop(self.redo_stack)
         push(self.undo_stack, act)
         return act
+
+func make_undo_history(max_len: int = 100) -> UndoHistory:
+    return UndoHistory([], [], max_len)

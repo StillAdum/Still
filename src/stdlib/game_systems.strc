@@ -6,7 +6,7 @@ type DialogueNode:
     id: str
     speaker: str
     text: str
-    choices: [DialogueChoice] = []
+    choices: [DialogueChoice]
 
 type Quest:
     id: str
@@ -29,10 +29,9 @@ type InventoryItem:
 
 type Inventory:
     max_weight: float = 100.0
-    items: [InventoryItem] = []
+    items: [InventoryItem]
 
     func add_item(self, id: str, name: str, count: int = 1, weight: float = 1.0) -> bool:
-        # check stacking
         for it in self.items:
             if it.id == id:
                 it.count = it.count + count
@@ -47,3 +46,9 @@ type Inventory:
                     it.count = it.count - count
                     return true
         return false
+
+func make_dialogue_node(id: str, speaker: str, text: str) -> DialogueNode:
+    return DialogueNode(id, speaker, text, [])
+
+func make_inventory(max_weight: float = 100.0) -> Inventory:
+    return Inventory(max_weight, [])

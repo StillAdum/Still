@@ -9,7 +9,7 @@ type ReliableChannel:
     local_seq: int = 0
     remote_seq: int = 0
     ack_bits: int = 0
-    pending: [Packet] = []
+    pending: [Packet]
 
     func send(self, payload: str, ch: int = 0) -> Packet:
         self.local_seq = self.local_seq + 1
@@ -34,7 +34,7 @@ type Lobby:
     id: str
     name: str
     max_players: int = 8
-    players: [str] = []
+    players: [str]
     host: str = ""
 
     func join(self, player_id: str) -> bool:
@@ -53,6 +53,12 @@ type Lobby:
         self.players = next_players
         if self.host == player_id and len(self.players) > 0:
             self.host = self.players[0]
+
+func make_reliable_channel() -> ReliableChannel:
+    return ReliableChannel(0, 0, 0, [])
+
+func make_lobby(id: str, name: str, max_players: int = 8) -> Lobby:
+    return Lobby(id, name, max_players, [], "")
 
 func serialize_packet(pkt: Packet) -> str:
     return "{pkt.seq}:{pkt.ack}:{pkt.ack_bits}:{pkt.channel}:{pkt.payload}"

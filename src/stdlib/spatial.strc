@@ -8,7 +8,7 @@ type SpatialItem:
 
 type SpatialGrid2D:
     cell_size: float = 10.0
-    items: [SpatialItem] = []
+    items: [SpatialItem]
 
     func add(self, id: int, x: float, y: float, r: float):
         push(self.items, SpatialItem(id, x, y, r))
@@ -40,3 +40,6 @@ type AABB3D:
         return not (self.max_x < o.min_x or o.max_x < self.min_x or
                     self.max_y < o.min_y or o.max_y < self.min_y or
                     self.max_z < o.min_z or o.max_z < self.min_z)
+
+func make_spatial_grid_2d(cell_size: float = 10.0) -> SpatialGrid2D:
+    return SpatialGrid2D(cell_size, [])

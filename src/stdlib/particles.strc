@@ -12,10 +12,11 @@ type ParticleItem:
 type ParticleEmitter:
     x: float = 0.0
     y: float = 0.0
-    particles: [ParticleItem] = []
+    particles: [ParticleItem]
     emission_rate: float = 100.0
 
-    func emit_one(self, vx: float, vy: float, life: float = 1.0, col: Color = Color(1.0, 1.0, 1.0, 1.0)):
+    func emit_one(self, vx: float, vy: float, life: float = 1.0):
+        col = Color(1.0, 1.0, 1.0, 1.0)
         push(self.particles, ParticleItem(self.x, self.y, vx, vy, life, life, col))
 
     func update(self, dt: float):
@@ -27,3 +28,6 @@ type ParticleEmitter:
                 p.y = p.y + p.vy * dt
                 push(alive, p)
         self.particles = alive
+
+func make_particle_emitter(x: float = 0.0, y: float = 0.0, rate: float = 100.0) -> ParticleEmitter:
+    return ParticleEmitter(x, y, [], rate)

@@ -4,8 +4,8 @@ type DxrGeometry:
     is_opaque: bool = true
 
 type DxrAccelerationStructure:
-    level: str # "bottom" or "top"
-    geometries: [DxrGeometry] = []
+    level: str
+    geometries: [DxrGeometry]
 
     func add_geometry(self, g: DxrGeometry):
         push(self.geometries, g)
@@ -24,3 +24,6 @@ type DirectMlTensor:
     dim_x: int
     dim_y: int
     data_type: str = "float32"
+
+func make_dxr_accel_structure(level: str) -> DxrAccelerationStructure:
+    return DxrAccelerationStructure(level, [])

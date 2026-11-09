@@ -18,7 +18,7 @@ type VoxelChunk:
     cx: int
     cy: int
     cz: int
-    blocks: [int] = []
+    blocks: [int]
 
     func get_block(self, lx: int, ly: int, lz: int) -> int:
         if lx < 0 or lx >= CHUNK_SIZE or ly < 0 or ly >= CHUNK_SIZE or lz < 0 or lz >= CHUNK_SIZE:
@@ -38,11 +38,11 @@ type VoxelQuad:
     x: int
     y: int
     z: int
-    face: int # 0=top, 1=bottom, 2=north, 3=south, 4=east, 5=west
+    face: int
     block_type: int
 
 type VoxelMesh:
-    quads: [VoxelQuad] = []
+    quads: [VoxelQuad]
 
     func add_quad(self, x: int, y: int, z: int, face: int, bt: int):
         push(self.quads, VoxelQuad(x, y, z, face, bt))

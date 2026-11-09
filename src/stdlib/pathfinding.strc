@@ -27,7 +27,7 @@ func euclidean_dist(x1: int, y1: int, x2: int, y2: int) -> float:
 type GridMap:
     width: int
     height: int
-    obstacles: [int] = []
+    obstacles: [int]
 
     func is_blocked(self, x: int, y: int) -> bool:
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
@@ -44,7 +44,6 @@ type GridMap:
             push(self.obstacles, idx)
 
     func find_path(self, start_x: int, start_y: int, goal_x: int, goal_y: int) -> [(int, int)]:
-        # simple direct A* pathfinding
         path = []
         cx = start_x
         cy = start_y
@@ -56,7 +55,6 @@ type GridMap:
             best_y = cy
             best_dist = 999999.0
             
-            # 4-directional search
             dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
             for d in dirs:
                 nx = cx + d[0]
@@ -73,3 +71,6 @@ type GridMap:
             cy = best_y
             push(path, (cx, cy))
         return path
+
+func make_grid_map(w: int, h: int) -> GridMap:
+    return GridMap(w, h, [])
