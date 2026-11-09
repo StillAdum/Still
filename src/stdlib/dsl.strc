@@ -18,10 +18,10 @@ type ShaderBuilder:
             res = res + inp + "\n"
         for u in self.uniforms:
             res = res + u + "\n"
-        res = res + "void main() {\n"
+        res = res + "void main() {{\n"
         for line in self.main_body:
             res = res + "    " + line + "\n"
-        res = res + "}\n"
+        res = res + "}}\n"
         return res
 
 type SqlBuilder:

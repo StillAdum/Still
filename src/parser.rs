@@ -899,14 +899,18 @@ impl Parser {
     }
 
     fn parse_cmp(&mut self) -> Option<Expr> {
-        let l = self.parse_add()?;
+        let l = self.parse_bitor()?;
         let sp = l.span();
         let op = match self.cur().tok {
             Tok::P(crate::lexer::P::EqEq) => Some(CmpOp::Eq),
             Tok::P(crate::lexer::P::NotEq) => Some(CmpOp::Ne),
+
             Tok::P(crate::lexer::P::Lt) => Some(CmpOp::Lt),
+
             Tok::P(crate::lexer::P::Le) => Some(CmpOp::Le),
+
             Tok::P(crate::lexer::P::Gt) => Some(CmpOp::Gt),
+
             Tok::P(crate::lexer::P::Ge) => Some(CmpOp::Ge),
             _ => None,
         };
@@ -966,6 +970,67 @@ impl Parser {
         }
     }
 
+    fn parse_bitor(&mut self) -> Option<Expr> {
+        let mut l = self.parse_bitxor()?;
+        loop {
+            let op = match self.cur().tok {
+                Tok::P(crate::lexer::P::Bor) => BinOp::Bor,
+                _ => break,
+            };
+            let sp = l.span();
+            self.bump();
+            let r = self.parse_bitxor()?;
+            l = Expr::Binary(op, Box::new(l), Box::new(r), sp);
+        }
+        Some(l)
+    }
+
+    fn parse_bitxor(&mut self) -> Option<Expr> {
+        let mut l = self.parse_bitand()?;
+        loop {
+            let op = match self.cur().tok {
+                Tok::P(crate::lexer::P::Bxor) => BinOp::Bxor,
+                _ => break,
+            };
+            let sp = l.span();
+            self.bump();
+            let r = self.parse_bitand()?;
+            l = Expr::Binary(op, Box::new(l), Box::new(r), sp);
+        }
+        Some(l)
+    }
+
+    fn parse_bitand(&mut self) -> Option<Expr> {
+        let mut l = self.parse_bitshift()?;
+        loop {
+            let op = match self.cur().tok {
+                Tok::P(crate::lexer::P::Band) => BinOp::Band,
+                _ => break,
+            };
+            let sp = l.span();
+            self.bump();
+            let r = self.parse_bitshift()?;
+            l = Expr::Binary(op, Box::new(l), Box::new(r), sp);
+        }
+        Some(l)
+    }
+
+    fn parse_bitshift(&mut self) -> Option<Expr> {
+        let mut l = self.parse_add()?;
+        loop {
+            let op = match self.cur().tok {
+                Tok::P(crate::lexer::P::LSL) => BinOp::Shl,
+                Tok::P(crate::lexer::P::RSr) => BinOp::Shr,
+                _ => break,
+            };
+            let sp = l.span();
+            self.bump();
+            let r = self.parse_add()?;
+            l = Expr::Binary(op, Box::new(l), Box::new(r), sp);
+        }
+        Some(l)
+    }
+
     fn parse_add(&mut self) -> Option<Expr> {
         let mut l = self.parse_mul()?;
         loop {
@@ -1006,6 +1071,12 @@ impl Parser {
             self.bump();
             let inner = self.parse_unary()?;
             return Some(Expr::Unary(UnOp::Neg, Box::new(inner), sp));
+        }
+        if matches!(self.cur().tok, Tok::P(crate::lexer::P::Tilde)) {
+            let sp = self.cur().span.clone();
+            self.bump();
+            let inner = self.parse_unary()?;
+            return Some(Expr::Unary(UnOp::BNot, Box::new(inner), sp));
         }
         self.parse_pow()
     }

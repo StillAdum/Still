@@ -1730,6 +1730,11 @@ impl Emitter {
                 BinOp::FloorDiv => format!("still_floordiv({}, {}, __FILE__, __LINE__)", l, r),
                 BinOp::Mod => format!("still_imod({}, {}, __FILE__, __LINE__)", l, r),
                 BinOp::Pow => format!("still_ipow({}, {}, __FILE__, __LINE__)", l, r),
+                BinOp::Shl => format!("(({}) << ({}))", l, r),
+                BinOp::Shr => format!("(({}) >> ({}))", l, r),
+                BinOp::Band => format!("(({}) & ({}))", l, r),
+                BinOp::Bor => format!("(({}) | ({}))", l, r),
+                BinOp::Bxor => format!("(({}) ^ ({}))", l, r),
                 BinOp::Div => format!("({} / (double){})", l, r),
             },
             (Ty::Float, _) | (_, Ty::Float) => match op {
@@ -1740,6 +1745,11 @@ impl Emitter {
                 BinOp::FloorDiv => format!("still_floordivf({}, {})", l, r),
                 BinOp::Mod => format!("still_fmodf_({}, {})", l, r),
                 BinOp::Pow => format!("pow({}, {})", l, r),
+                BinOp::Shl => format!("(({}) << ({}))", l, r),
+                BinOp::Shr => format!("(({}) >> ({}))", l, r),
+                BinOp::Band => format!("(({}) & ({}))", l, r),
+                BinOp::Bor => format!("(({}) | ({}))", l, r),
+                BinOp::Bxor => format!("(({}) ^ ({}))", l, r),
             },
             (Ty::Str, Ty::Str) => {
                 let t = self.newtmp();
@@ -1902,6 +1912,10 @@ impl Emitter {
             X::Neg(v) => {
                 let e = self.emit_expr(v);
                 format!("(-({}))", e)
+            }
+            X::BNot(v) => {
+                let e = self.emit_expr(v);
+                format!("(~({}))", e)
             }
             X::Not(v) => {
                 let e = self.emit_expr(v);

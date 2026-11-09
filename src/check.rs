@@ -259,6 +259,7 @@ impl Checker {
                     defaults: Vec::new(),
                     is_soa: td.is_soa(),
                     methods: Vec::new(),
+                    statics: Vec::new(),
                     exported: td.attrs.iter().any(|a| a == "export"),
                 },
             );
@@ -297,14 +298,19 @@ impl Checker {
                 fields.push((f.name.clone(), ty));
             }
             let mut methods = Vec::new();
+            let mut statics = Vec::new();
             for m in &td.methods {
-                if m.params.is_empty() || m.params[0].name != "self" {
-                    self.diags.push(err(&m.span, format!("method '{}' must take 'self' as its first parameter", m.name)));
-                    continue;
-                }
                 let mkey = format!("{}.{}", td.name, m.name);
                 if self.funcs.contains_key(&(module.clone(), mkey.clone())) {
                     self.diags.push(err(&m.span, format!("method '{}' is already defined for type '{}'", m.name, td.name)));
+                    continue;
+                }
+                // Static factory-style method: any method without a leading
+                // 'self' parameter is callable on the type itself.
+                if m.params.is_empty() || m.params[0].name != "self" {
+                    self.funcs.insert((module.clone(), mkey.clone()), Rc::new(m.clone()));
+                    self.fn_order.push((module.clone(), mkey.clone()));
+                    statics.push(mkey);
                     continue;
                 }
                 self.funcs.insert((module.clone(), mkey.clone()), Rc::new(m.clone()));
@@ -320,6 +326,7 @@ impl Checker {
                     defaults,
                     is_soa: td.is_soa(),
                     methods,
+                    statics,
                     exported: td.attrs.iter().any(|a| a == "export"),
                 },
             );
@@ -481,6 +488,31 @@ impl Checker {
                     _ => return None,
                 }
             }
+            Expr::Unary(UnOp::BNot, inner, _) => {
+                let t = self.const_eval(inner)?;
+                match t.x {
+                    X::Int(v) => X::Int(!v),
+                    _ => return None,
+                }
+            }
+            Expr::ListLit(items, _) => {
+                let mut xs = Vec::new();
+                for i in items {
+                    xs.push(self.const_eval(i)?);
+                }
+                let ty = if xs.is_empty() {
+                    Ty::List(Rc::new(Ty::Var(Rc::new(std::cell::RefCell::new(None)))))
+                } else {
+                    let first = resolve(&xs[0].ty);
+                    for x in xs[1..].iter() {
+                        if !ty_eq(&x.ty, &first) {
+                            return None;
+                        }
+                    }
+                    Ty::List(Rc::new(first))
+                };
+                X::ListLit(xs)
+            }
             Expr::Binary(op, l, r, _) => {
                 let lt = self.const_eval(l)?;
                 let rt = self.const_eval(r)?;
@@ -515,6 +547,21 @@ impl Checker {
                                 }
                                 a.checked_pow(b as u32)?
                             }
+                            BinOp::Shl => {
+                                if b < 0 || b > 63 {
+                                    return None;
+                                }
+                                a.checked_shl(b as u32).unwrap_or(i64::MIN)
+                            }
+                            BinOp::Shr => {
+                                if b < 0 || b > 63 {
+                                    return None;
+                                }
+                                a.checked_shr(b as u32).unwrap_or(0)
+                            }
+                            BinOp::Band => a & b,
+                            BinOp::Bor => a | b,
+                            BinOp::Bxor => a ^ b,
                         };
                         X::Int(v)
                     }
@@ -687,6 +734,20 @@ impl Checker {
                     }
                     other => {
                         self.diags.push(err(&sp, format!("cannot negate {}", ty_name(&other))));
+                        None
+                    }
+                }
+            }
+            Expr::Unary(UnOp::BNot, inner, _) => {
+                let v = self.infer(ctx, inner)?;
+                match resolve(&v.ty) {
+                    Ty::Int => Some(Tx { ty: Ty::Int, span: sp, x: X::BNot(Box::new(v)) }),
+                    Ty::Var(_) => {
+                        self.diags.push(err(&sp, "cannot infer the type of '~'; annotate the value".into()));
+                        None
+                    }
+                    other => {
+                        self.diags.push(err(&sp, format!("cannot apply '~' (bitwise not) to {}", ty_name(&other))));
                         None
                     }
                 }
@@ -1005,6 +1066,21 @@ impl Checker {
                     None
                 }
             },
+            BinOp::Shl | BinOp::Shr => match (&l, &r) {
+                (Ty::Int, Ty::Int) => Some(Tx { ty: Ty::Int, span: sp.clone(), x: X::Arith(op, Box::new(lt), Box::new(rt)) }),
+                _ => {
+                    self.diags.push(err(sp, format!("shift operators need two ints; got {} and {}", ty_name(&l), ty_name(&r))));
+                    None
+                }
+            },
+            BinOp::Band | BinOp::Bor | BinOp::Bxor => match (&l, &r) {
+                (Ty::Int, Ty::Int) => Some(Tx { ty: Ty::Int, span: sp.clone(), x: X::Arith(op, Box::new(lt), Box::new(rt)) }),
+                (Ty::Bool, Ty::Bool) => Some(Tx { ty: Ty::Bool, span: sp.clone(), x: X::Arith(op, Box::new(lt), Box::new(rt)) }),
+                _ => {
+                    self.diags.push(err(sp, format!("bitwise operators need int (or bool) values; got {} and {}", ty_name(&l), ty_name(&r))));
+                    None
+                }
+            },
             BinOp::Pow => {
                 let int_pow = matches!((&l, &r), (Ty::Int, Ty::Int)) && matches!(&rt.x, X::Int(k) if *k >= 0);
                 if int_pow {
@@ -1294,6 +1370,11 @@ impl Checker {
                         if self.funcs.contains_key(&(target.clone(), name.clone())) {
                             return self.call_fn(ctx, target, name, ax, sp);
                         }
+                        // static methods registered as "Type.method" — e.g. from_km after `use units`
+                        let suffix = format!(".{}", name);
+                        if let Some(mkey) = self.funcs.keys().find(|(m, n)| *m == *target && n.ends_with(&suffix)).map(|(_, n)| n.clone()) {
+                            return self.call_fn(ctx, target, &mkey, ax, sp);
+                        }
                     }
                 }
                 match self.builtin_call(ctx, name, ax, sp) {
@@ -1320,6 +1401,22 @@ impl Checker {
                 if let Expr::Ident(base, bsp) = obj.as_ref() {
                     let module = ctx.module.clone();
                     if ctx.lookup(base).is_none() {
+                        // Static method on a type itself: Length.from_km(5.0)
+                        if let Some(qual) = self.short_types.get(&module).and_then(|s| s.get(base)).cloned() {
+                            let mkey = format!("{}.{}", qual.split("::").next_back().unwrap_or(base), mname);
+                            if self.funcs.contains_key(&(module.clone(), mkey.clone())) {
+                                let mut ax = Vec::new();
+                                for a in args {
+                                    ax.push(self.infer(ctx, a)?);
+                                }
+                                return self.call_fn(ctx, &module, &mkey, ax, sp);
+                            }
+                            let istatic = self.prog.structs.get(&qual).map(|s| s.statics.iter().any(|m| m.ends_with(&format!(".{}", mname)))).unwrap_or(false);
+                            if !istatic {
+                                self.diags.push(err(msp, format!("type '{}' has no static method '{}'; check the spelling or pass an instance first", base, mname)));
+                                return None;
+                            }
+                        }
                         if let Some(target) = self.aliases.get(&module).and_then(|m| m.get(base)).cloned() {
                             let mut ax = Vec::new();
                             for a in args {
@@ -1361,12 +1458,17 @@ impl Checker {
                             return self.soa_method(&qual, recv, mname, ax, msp);
                         }
                         let mkey = format!("{}.{}", si.name, mname);
+                        if si.statics.iter().any(|m| *m == mkey) {
+                            self.diags.push(err(msp, format!("'{}' is a static method of '{}' — call it as '{}'.'{}'(...)", mname, si.name, si.name, mname)));
+                            return None;
+                        }
                         if self.funcs.contains_key(&(si.module.clone(), mkey.clone())) {
                             let mut full = vec![recv];
                             full.extend(ax);
                             return self.call_fn(ctx, &si.module, &mkey, full, sp);
                         }
                         let mut known: Vec<String> = si.methods.iter().map(|m| m.split('.').next_back().unwrap_or(m).to_string()).collect();
+                        known.extend(si.statics.iter().map(|m| m.split('.').next_back().unwrap_or(m).to_string()));
                         known.extend(si.fields.iter().map(|(f, _)| f.clone()));
                         let hint = did_you_mean(mname, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
                         self.diags.push(err(msp, format!("type '{}' has no method '{}'{}", si.name, mname, hint)));
@@ -2710,7 +2812,7 @@ impl Checker {
             let (place, pty) = self.check_target(ctx, &targets[0])?;
             let vt = self.infer(ctx, value)?;
             let bound = self.compat(&vt.ty, &pty);
-            if !bound && assign_ok(&vt.ty, &pty).is_none() {
+            if !bound && assign_ok(&vt.ty, &pty).is_none() && !coerce_holes(&vt.ty, &pty) {
                 self.diags.push(err(&vt.span, format!("cannot assign {} here (this holds {})", ty_name(&vt.ty), ty_name(&pty))));
                 return None;
             }

@@ -76,6 +76,11 @@ pub enum BinOp {
     FloorDiv,
     Mod,
     Pow,
+    Shl,
+    Shr,
+    Band,
+    Bor,
+    Bxor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,6 +129,7 @@ pub enum InterpPart {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum UnOp {
     Neg,
+    BNot,
 }
 
 #[derive(Clone, Debug)]
@@ -299,6 +305,7 @@ pub enum X {
     StructLit(String, Vec<(String, Tx)>),
     SoaNew(String, Box<Tx>),
     Neg(Box<Tx>),
+    BNot(Box<Tx>),
     Not(Box<Tx>),
     Arith(BinOp, Box<Tx>, Box<Tx>),
     And(Box<Tx>, Box<Tx>),
@@ -471,6 +478,7 @@ pub struct StructInfo {
     pub defaults: Vec<Option<Tx>>,
     pub is_soa: bool,
     pub methods: Vec<String>,
+    pub statics: Vec<String>,
     pub exported: bool,
 }
 

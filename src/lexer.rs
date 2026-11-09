@@ -65,6 +65,12 @@ pub enum P {
     Le,
     Gt,
     Ge,
+    LSL,
+    RSr,
+    Band,
+    Bor,
+    Bxor,
+    Tilde,
     Question,
     At,
 }
@@ -655,6 +661,10 @@ impl Lexer {
                     self.bump();
                     P::Le
                 }
+                Some('<') => {
+                    self.bump();
+                    P::LSL
+                }
                 _ => P::Lt,
             },
             '>' => match two(self) {
@@ -662,8 +672,28 @@ impl Lexer {
                     self.bump();
                     P::Ge
                 }
+                Some('>') => {
+                    self.bump();
+                    P::RSr
+                }
                 _ => P::Gt,
             },
+            '|' => {
+                if two(self) == Some('|') {
+                    self.bump();
+                    self.diags.push(err(&sp, "unexpected '||' (use 'or')".into()));
+                }
+                P::Bor
+            }
+            '&' => {
+                if two(self) == Some('&') {
+                    self.bump();
+                    self.diags.push(err(&sp, "unexpected '&&' (use 'and')".into()));
+                }
+                P::Band
+            }
+            '^' => P::Bxor,
+            '~' => P::Tilde,
             '?' => P::Question,
             '@' => P::At,
             other => {

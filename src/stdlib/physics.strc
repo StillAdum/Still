@@ -74,9 +74,9 @@ type World2D:
                         vel_along_normal = rvx * nx + rvy * ny
                         if vel_along_normal < 0.0:
                             restit = (b1.restitution + b2.restitution) * 0.5
-                            j = -(1.0 + restit) * vel_along_normal / total_inv
-                            b1.apply_impulse(-nx * j, -ny * j)
-                            b2.apply_impulse(nx * j, ny * j)
+                            imp = -(1.0 + restit) * vel_along_normal / total_inv
+                            b1.apply_impulse(-nx * imp, -ny * imp)
+                            b2.apply_impulse(nx * imp, ny * imp)
 
 func make_world_2d(gx: float = 0.0, gy: float = -9.81) -> World2D:
     return World2D([], gx, gy)

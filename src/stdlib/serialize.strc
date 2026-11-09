@@ -17,10 +17,10 @@ func to_json_bool(key: str, val: bool) -> str:
     return "\"{key}\":false"
 
 func wrap_json_obj(items: [str]) -> str:
-    out = "{"
+    out = "{{"
     for i in range(len(items)):
         if i > 0:
             out = out + ","
         out = out + items[i]
-    out = out + "}"
+    out = out + "}}"
     return out

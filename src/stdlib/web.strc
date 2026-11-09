@@ -33,7 +33,7 @@ type WebServer:
     func handle_request(self, req: HttpRequest) -> HttpResponse:
         for r in self.routes:
             if r.method == req.method and r.path == req.path:
-                return HttpResponse(200, "OK", "application/json", "{\"status\":\"ok\",\"handler\":\"{r.handler_id}\"}")
+                return HttpResponse(200, "OK", "application/json", "{{\"status\":\"ok\",\"handler\":\"{r.handler_id}\"}}")
         return HttpResponse(404, "Not Found", "text/plain", "404 Not Found")
 
 func make_web_server(port: int = 8080) -> WebServer:
