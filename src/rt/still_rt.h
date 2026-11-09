@@ -7,7 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _MSC_VER
+// TinyCC (portable tcc) lacks __builtin_*_overflow too — use the same
+// portable integer checks as MSVC so any small C compiler can build Still.
+#if defined(_MSC_VER) || defined(__TINYC__)
 static inline int still_msvc_add_ovf(int64_t a, int64_t b, int64_t* r) {
     if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) return 1;
     *r = a + b;
