@@ -280,28 +280,69 @@ pub fn setup_cc() -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).map_err(|e| e.to_string())?;
     let bin_dir = PathBuf::from(home).join(".still").join("bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| format!("failed to create {}: {}", bin_dir.display(), e))?;
-    
+
     if cfg!(windows) {
         let target_tcc = bin_dir.join("tcc.exe");
         if target_tcc.is_file() {
             return Ok(target_tcc);
         }
-        // Try powershell download of portable tinycc
+        // Download portable TinyCC (~2MB): primary source is our release;
+        // mirrors are tried as fallbacks.
+        let urls = [
+            "https://github.com/StillAdum/Still/releases/download/v0.2.0/tcc-win64.zip",
+            "https://github.com/bained/C-Chads_tinycc-binary/raw/main/C-Chads_tinycc_0.9.28rc-binary.zip",
+        ];
         let ps_cmd = format!(
-            "$dest = '{}'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $zip = Join-Path $dest 'tcc.zip'; Invoke-WebRequest -Uri 'https://github.com/StillAdum/still/releases/download/v0.2.0/tcc-win64.zip' -OutFile $zip -ErrorAction SilentlyContinue; if (Test-Path $zip) {{ Expand-Archive -Path $zip -DestinationPath $dest -Force; Remove-Item $zip }}",
-            bin_dir.display()
+            "$dest = '{}'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $zip = Join-Path $dest 'tcc.zip'; foreach ($u in {}) {{ Invoke-WebRequest -Uri $u -OutFile $zip -ErrorAction SilentlyContinue; if ((Test-Path $zip) -and ((Get-Item $zip).Length -gt 100000)) {{ Expand-Archive -Path $zip -DestinationPath $dest -Force; Remove-Item $zip; if (-not (Test-Path (Join-Path $dest 'tcc.exe'))) {{ $found = Get-ChildItem -Path $dest -Recurse -Filter 'tcc.exe' | Select-Object -First 1; if ($found) {{ $sub = Split-Path $found.FullName; Move-Item (Join-Path $sub '*') $dest -Force -ErrorAction SilentlyContinue }} }}; break }} }}",
+            bin_dir.display(),
+            urls.iter().map(|u| format!("'{}'", u)).collect::<Vec<_>>().join(", ")
         );
         let _ = Command::new("powershell").args(["-NoProfile", "-Command", &ps_cmd]).output();
         if target_tcc.is_file() {
             return Ok(target_tcc);
         }
+    } else {
+        // Linux/macOS: system package manager first (best integration), then
+        // our tiny (~500KB) standalone tcc tarball from the project release.
+        let target_tcc = bin_dir.join("tcc");
+        if target_tcc.is_file() {
+            return Ok(target_tcc);
+        }
+        let _ = Command::new("bash").args(["-c", "(tcc -v || apt-get install -y tcc || sudo apt-get install -y tcc || dnf install -y tcc || apk add tcc || pacman -S --noconfirm tcc) 2>/dev/null"]).output();
+        if which("tcc") {
+            return Ok(PathBuf::from("tcc"));
+        }
+        let url = if cfg!(target_arch = "x86_64") && cfg!(target_os = "linux") {
+            Some("https://github.com/StillAdum/Still/releases/download/v0.2.0/tcc-linux-x86_64.tar.gz")
+        } else {
+            None
+        };
+        if let Some(url) = url {
+            // Extract so tcc lands in ~/.still/bin and its runtime in
+            // ~/.still/lib (tcc finds libtcc1 via its ../lib/tcc relative path).
+            let root = bin_dir.parent().unwrap_or(&bin_dir).display().to_string();
+            let dl = format!(
+                "curl -fsSLf '{u}' -o 'r/tcc-setup.tar.gz' && tar xzf 'r/tcc-setup.tar.gz' -C 'r' --no-same-owner && rm -f 'r/tcc-setup.tar.gz'",
+                u = url,
+                r = root
+            );
+            let _ = Command::new("bash").args(["-c", &dl]).output();
+            let target_tcc = bin_dir.join("tcc");
+            if target_tcc.is_file() {
+                #[cfg(unix)]
+                {
+                    let _ = std::fs::set_permissions(&target_tcc, std::os::unix::fs::PermissionsExt::from_mode(0o755));
+                }
+                return Ok(target_tcc);
+            }
+        }
     }
-    
+
     // Check if gcc or clang or tcc is available
     if let Some(tc) = find_cc() {
         return Ok(tc.program);
     }
-    
+
     Err(format!("Portable compiler directory prepared at {}. Place 'tcc' or 'gcc' here or on PATH.", bin_dir.display()))
 }
 
