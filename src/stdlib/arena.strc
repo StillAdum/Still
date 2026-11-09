@@ -1,0 +1,43 @@
+type Handle:
+    index: int
+    generation: int
+
+type Slot:
+    generation: int = 1
+    occupied: bool = false
+    value: str = ""
+
+type SlotMap:
+    slots: [Slot] = []
+    free_indices: [int] = []
+
+    func insert(self, val: str) -> Handle:
+        idx = -1
+        gen = 1
+        if len(self.free_indices) > 0:
+            idx = pop(self.free_indices)
+            gen = self.slots[idx].generation
+            self.slots[idx].occupied = true
+            self.slots[idx].value = val
+        else:
+            idx = len(self.slots)
+            push(self.slots, Slot(1, true, val))
+        return Handle(idx, gen)
+
+    func get(self, h: Handle) -> str:
+        if h.index >= 0 and h.index < len(self.slots):
+            s = self.slots[h.index]
+            if s.occupied and s.generation == h.generation:
+                return s.value
+        return ""
+
+    func remove(self, h: Handle) -> bool:
+        if h.index >= 0 and h.index < len(self.slots):
+            s = self.slots[h.index]
+            if s.occupied and s.generation == h.generation:
+                s.occupied = false
+                s.generation = s.generation + 1
+                s.value = ""
+                push(self.free_indices, h.index)
+                return true
+        return false

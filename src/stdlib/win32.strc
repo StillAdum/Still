@@ -1,0 +1,37 @@
+type Win32Point:
+    x: int
+    y: int
+
+type Win32Rect:
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+type Win32Window:
+    hwnd: int
+    title: str
+    width: int
+    height: int
+
+func win32_is_windows() -> bool:
+    # returns true on windows host
+    return true
+
+func win32_make_point(x: int, y: int) -> Win32Point:
+    return Win32Point(x, y)
+
+func win32_make_rect(l: int, t: int, r: int, b: int) -> Win32Rect:
+    return Win32Rect(l, t, r, b)
+
+type RegistryKey:
+    root: str # HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE
+    sub_key: str
+
+    func read_string(self, value_name: str) -> str:
+        # standard registry read stub
+        return ""
+
+    func write_string(self, value_name: str, data: str) -> bool:
+        # standard registry write stub
+        return true

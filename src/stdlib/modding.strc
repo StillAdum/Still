@@ -1,0 +1,20 @@
+type ModManifest:
+    id: str
+    name: str
+    version: str
+    author: str
+    entry_point: str
+    enabled: bool = true
+
+type ModManager:
+    mods: [ModManifest] = []
+
+    func register_mod(self, id: str, name: str, ver: str, entry: str):
+        push(self.mods, ModManifest(id, name, ver, "author", entry, true))
+
+    func get_enabled_mods(self) -> [ModManifest]:
+        res = []
+        for m in self.mods:
+            if m.enabled:
+                push(res, m)
+        return res

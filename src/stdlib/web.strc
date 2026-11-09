@@ -1,0 +1,48 @@
+type HttpRequest:
+    method: str
+    path: str
+    headers: {str: str}
+    body: str
+
+type HttpResponse:
+    status: int = 200
+    status_text: str = "OK"
+    content_type: str = "text/plain"
+    body: str = ""
+
+    func to_http_string(self) -> str:
+        content_len = len(self.body)
+        res = "HTTP/1.1 {self.status} {self.status_text}\r\n"
+        res = res + "Content-Type: {self.content_type}\r\n"
+        res = res + "Content-Length: {content_len}\r\n"
+        res = res + "Connection: close\r\n\r\n"
+        res = res + self.body
+        return res
+
+type Route:
+    method: str
+    path: str
+    handler_id: str
+
+type WebServer:
+    port: int = 8080
+    routes: [Route] = []
+
+    func route(self, method: str, path: str, handler_id: str):
+        push(self.routes, Route(method, path, handler_id))
+
+    func handle_request(self, req: HttpRequest) -> HttpResponse:
+        for r in self.routes:
+            if r.method == req.method and r.path == req.path:
+                return HttpResponse(200, "OK", "application/json", "{\"status\":\"ok\",\"handler\":\"{r.handler_id}\"}")
+        return HttpResponse(404, "Not Found", "text/plain", "404 Not Found")
+
+func parse_http_request(raw: str) -> HttpRequest:
+    lines = raw.split("\r\n")
+    if len(lines) == 0 or lines[0] == "":
+        lines = raw.split("\n")
+    if len(lines) > 0:
+        first = lines[0].split(" ")
+        if len(first) >= 2:
+            return HttpRequest(first[0], first[1], {}, "")
+    return HttpRequest("GET", "/", {}, "")

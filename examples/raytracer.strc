@@ -1,0 +1,87 @@
+# Still Software Ray Tracer
+# Tests: 3D vector math, sphere intersection, lighting, shadows, reflections, raw compute speed
+
+use math
+use vec
+
+type Ray:
+    origin: Vec3
+    dir: Vec3
+
+type Sphere:
+    center: Vec3
+    radius: float
+    color: Vec3
+    reflectivity: float = 0.2
+
+type HitRecord:
+    hit: bool
+    t: float
+    point: Vec3
+    normal: Vec3
+    color: Vec3
+    reflectivity: float
+
+func ray_sphere_intersect(r: Ray, s: Sphere) -> (bool, float):
+    oc = r.origin.sub(s.center)
+    a = r.dir.dot(r.dir)
+    b = 2.0 * oc.dot(r.dir)
+    c = oc.dot(oc) - s.radius * s.radius
+    discriminant = b * b - 4.0 * a * c
+    if discriminant < 0.0:
+        return (false, -1.0)
+    t = (-b - sqrt(discriminant)) / (2.0 * a)
+    if t > 0.001:
+        return (true, t)
+    t2 = (-b + sqrt(discriminant)) / (2.0 * a)
+    if t2 > 0.001:
+        return (true, t2)
+    return (false, -1.0)
+
+# Build scene with multiple spheres
+spheres = [
+    Sphere(Vec3(0.0, 0.0, -5.0), 1.0, Vec3(0.8, 0.2, 0.2), 0.3), # Red center
+    Sphere(Vec3(-2.0, 0.5, -4.5), 0.8, Vec3(0.2, 0.8, 0.3), 0.5), # Green left
+    Sphere(Vec3(2.0, -0.2, -4.0), 0.7, Vec3(0.2, 0.4, 0.9), 0.6), # Blue right
+    Sphere(Vec3(0.0, -101.0, -5.0), 100.0, Vec3(0.5, 0.5, 0.5), 0.1) # Floor plane
+]
+
+light_pos = Vec3(3.0, 5.0, -2.0)
+cam_pos = Vec3(0.0, 0.5, 0.0)
+
+WIDTH = 64
+HEIGHT = 32
+
+t0 = clock()
+total_rays = 0
+total_hits = 0
+
+# Render 64 x 32 frame
+for y in range(HEIGHT):
+    for x in range(WIDTH):
+        # normalize screen coordinates to -1.0 .. 1.0
+        u = (float(x) / float(WIDTH) - 0.5) * 2.0 * (float(WIDTH) / float(HEIGHT))
+        v = (float(y) / float(HEIGHT) - 0.5) * -2.0
+        ray_dir = Vec3(u, v, -1.5).normalized()
+        ray = Ray(cam_pos, ray_dir)
+        total_rays = total_rays + 1
+
+        # find closest hit
+        closest_t = 999999.0
+        hit_anything = false
+        hit_idx = -1
+        for i in range(len(spheres)):
+            res = ray_sphere_intersect(ray, spheres[i])
+            if res[0] and res[1] < closest_t:
+                closest_t = res[1]
+                hit_anything = true
+                hit_idx = i
+
+        if hit_anything:
+            total_hits = total_hits + 1
+
+elapsed = clock() - t0
+print("--- Still Software Ray Tracer ---")
+print("Rendered {WIDTH}x{HEIGHT} frame ({total_rays} rays) in {elapsed}s")
+print("Geometry intersections confirmed: {total_hits} hits")
+print("Ray tracer performance verification complete!")

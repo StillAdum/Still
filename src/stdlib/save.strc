@@ -1,0 +1,35 @@
+use io
+
+type SaveData:
+    version: int
+    player_name: str
+    level: int
+    score: int
+    checksum: int
+
+func calculate_checksum(s: str) -> int:
+    cs = 0
+    for i in range(len(s)):
+        cs = (cs * 31 + ord(s[i])) % 1000000007
+    return cs
+
+func save_game(path: str, data: SaveData) -> bool:
+    payload = "{data.version}:{data.player_name}:{data.level}:{data.score}"
+    cs = calculate_checksum(payload)
+    full_str = "{payload}:{cs}\n"
+    write_file(path, full_str)
+    return true
+
+func load_game(path: str) -> (bool, SaveData):
+    content = read_file(path)
+    parts = content.trim().split(":")
+    if len(parts) >= 5:
+        ver = int(parts[0])
+        name = parts[1]
+        lvl = int(parts[2])
+        sc = int(parts[3])
+        stored_cs = int(parts[4])
+        calc_cs = calculate_checksum("{ver}:{name}:{lvl}:{sc}")
+        if stored_cs == calc_cs:
+            return (true, SaveData(ver, name, lvl, sc, stored_cs))
+    return (false, SaveData(0, "", 0, 0, 0))

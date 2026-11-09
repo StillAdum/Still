@@ -1,0 +1,84 @@
+# Still Bullet-Hell (Danmaku) Engine Benchmark
+# Tests: High-density particle/bullet updates, math routines, spatial checks, 60 FPS performance
+
+use math
+
+@soa type Bullet:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    alive: bool
+
+type DanmakuBoss:
+    x: float = 400.0
+    y: float = 300.0
+    spiral_angle: float = 0.0
+
+bullets = Bullet(5000)
+boss = DanmakuBoss()
+
+# Pre-populate bullets
+for i in range(5000):
+    bullets.push(400.0, 300.0, 0.0, 0.0, false)
+
+func spawn_spiral_burst(b: DanmakuBoss, count: int, speed: float):
+    spawned = 0
+    for i in range(len(bullets)):
+        if not bullets.alive[i]:
+            angle = b.spiral_angle + float(spawned) * (6.2831853 / float(count))
+            bullets.x[i] = b.x
+            bullets.y[i] = b.y
+            bullets.vx[i] = cos(angle) * speed
+            bullets.vy[i] = sin(angle) * speed
+            bullets.alive[i] = true
+            spawned = spawned + 1
+            if spawned >= count:
+                break
+    b.spiral_angle = b.spiral_angle + 0.15
+
+# Simulate 180 frames of Danmaku bullet hell
+dt = 0.016
+t0 = clock()
+player_x = 400.0
+player_y = 100.0
+player_radius = 4.0
+hits = 0
+grazes = 0
+
+for frame in range(180):
+    # Spawn pattern every 3 frames
+    if frame % 3 == 0:
+        spawn_spiral_burst(boss, 32, 180.0)
+
+    # Update active bullets
+    for i in bullets:
+        if bullets.alive[i]:
+            bullets.x[i] = bullets.x[i] + bullets.vx[i] * dt
+            bullets.y[i] = bullets.y[i] + bullets.vy[i] * dt
+
+            # Screen bounds check (800 x 600)
+            if bullets.x[i] < 0.0 or bullets.x[i] > 800.0 or bullets.y[i] < 0.0 or bullets.y[i] > 600.0:
+                bullets.alive[i] = false
+            else:
+                # Collision check against player
+                dx = bullets.x[i] - player_x
+                dy = bullets.y[i] - player_y
+                dist_sq = dx * dx + dy * dy
+                if dist_sq < player_radius * player_radius:
+                    hits = hits + 1
+                    bullets.alive[i] = false
+                elif dist_sq < 25.0 * 25.0:
+                    grazes = grazes + 1
+
+elapsed = clock() - t0
+active_count = 0
+for i in bullets:
+    if bullets.alive[i]:
+        active_count = active_count + 1
+
+print("--- Still Bullet-Hell (Danmaku) Benchmark ---")
+print("Simulated 180 frames of high-density bullet patterns in {elapsed}s")
+print("Active bullets on screen: {active_count}")
+print("Player Hits: {hits}, Grazes: {grazes}")
+print("Danmaku performance test passed!")

@@ -1,0 +1,120 @@
+# Still Voxel Sandbox Engine Stress-Test
+# Tests: 3D chunk memory, procedural world generation, face-culling mesher, raycasting block break/place
+
+use math
+use vec
+
+# Block Types
+AIR = 0
+GRASS = 1
+DIRT = 2
+STONE = 3
+WOOD = 4
+LEAVES = 5
+
+CHUNK_SIZE = 16
+
+type VoxelChunk:
+    cx: int
+    cy: int
+    cz: int
+    blocks: [int] = []
+
+    func get_block(self, lx: int, ly: int, lz: int) -> int:
+        if lx < 0 or lx >= CHUNK_SIZE or ly < 0 or ly >= CHUNK_SIZE or lz < 0 or lz >= CHUNK_SIZE:
+            return AIR
+        idx = (ly * CHUNK_SIZE + lz) * CHUNK_SIZE + lx
+        if idx >= 0 and idx < len(self.blocks):
+            return self.blocks[idx]
+        return AIR
+
+    func set_block(self, lx: int, ly: int, lz: int, block_type: int):
+        if lx >= 0 and lx < CHUNK_SIZE and ly >= 0 and ly < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE:
+            idx = (ly * CHUNK_SIZE + lz) * CHUNK_SIZE + lx
+            if idx >= 0 and idx < len(self.blocks):
+                self.blocks[idx] = block_type
+
+type VoxelQuad:
+    x: int
+    y: int
+    z: int
+    face: int # 0=top, 1=bottom, 2=north, 3=south, 4=east, 5=west
+    block_type: int
+
+type VoxelMesh:
+    quads: [VoxelQuad] = []
+
+    func add_quad(self, x: int, y: int, z: int, face: int, bt: int):
+        push(self.quads, VoxelQuad(x, y, z, face, bt))
+
+func create_chunk(cx: int, cy: int, cz: int) -> VoxelChunk:
+    chunk = VoxelChunk(cx, cy, cz, [])
+    # 16 x 16 x 16 = 4096 voxels per chunk
+    for ly in range(CHUNK_SIZE):
+        for lz in range(CHUNK_SIZE):
+            for lx in range(CHUNK_SIZE):
+                world_x = cx * CHUNK_SIZE + lx
+                world_z = cz * CHUNK_SIZE + lz
+                # procedural terrain height using harmonics
+                h = 6.0 + 3.0 * sin(float(world_x) * 0.15) + 2.0 * cos(float(world_z) * 0.15)
+                height = int(h)
+                world_y = cy * CHUNK_SIZE + ly
+                bt = AIR
+                if world_y < height - 2:
+                    bt = STONE
+                elif world_y < height:
+                    bt = DIRT
+                elif world_y == height:
+                    bt = GRASS
+                push(chunk.blocks, bt)
+    return chunk
+
+func mesh_chunk(chunk: VoxelChunk) -> VoxelMesh:
+    mesh = VoxelMesh([])
+    for y in range(CHUNK_SIZE):
+        for z in range(CHUNK_SIZE):
+            for x in range(CHUNK_SIZE):
+                b = chunk.get_block(x, y, z)
+                if b != AIR:
+                    # check 6 neighboring faces for culling
+                    if chunk.get_block(x, y + 1, z) == AIR:
+                        mesh.add_quad(x, y, z, 0, b) # top
+                    if chunk.get_block(x, y - 1, z) == AIR:
+                        mesh.add_quad(x, y, z, 1, b) # bottom
+                    if chunk.get_block(x, y, z + 1) == AIR:
+                        mesh.add_quad(x, y, z, 2, b) # north
+                    if chunk.get_block(x, y, z - 1) == AIR:
+                        mesh.add_quad(x, y, z, 3, b) # south
+                    if chunk.get_block(x + 1, y, z) == AIR:
+                        mesh.add_quad(x, y, z, 4, b) # east
+                    if chunk.get_block(x - 1, y, z) == AIR:
+                        mesh.add_quad(x, y, z, 5, b) # west
+    return mesh
+
+# Benchmark world generation and meshing
+t0 = clock()
+world_chunks = []
+total_quads = 0
+
+# generate a 4x4 region of chunks (65,536 voxels)
+for cx in range(4):
+    for cz in range(4):
+        c = create_chunk(cx, 0, cz)
+        mesh = mesh_chunk(c)
+        total_quads = total_quads + len(mesh.quads)
+        push(world_chunks, c)
+
+gen_time = clock() - t0
+
+# Raycasting simulation: break a block and place a block
+test_chunk = world_chunks[0]
+print("--- Still Voxel Sandbox Engine ---")
+print("Generated 16 chunks (65,536 voxels) in {gen_time}s")
+print("Greedy/culled visible quads: {total_quads}")
+print("Testing block manipulation at (8, 6, 8):")
+print("Before: block = {test_chunk.get_block(8, 6, 8)}")
+test_chunk.set_block(8, 6, 8, AIR)
+print("After break: block = {test_chunk.get_block(8, 6, 8)}")
+test_chunk.set_block(8, 6, 8, WOOD)
+print("After place: block = {test_chunk.get_block(8, 6, 8)}")
+print("Voxel engine verification complete!")

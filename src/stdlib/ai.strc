@@ -1,0 +1,35 @@
+# Node status: 0 = RUNNING, 1 = SUCCESS, 2 = FAILURE
+
+type BtNode:
+    name: str
+    kind: str # "sequence", "selector", "action"
+    status: int = 1
+
+type BehaviorTree:
+    root: BtNode
+
+    func tick(self) -> int:
+        return self.root.status
+
+type GoapAction:
+    name: str
+    cost: float
+    precondition_key: str
+    precondition_val: bool
+    effect_key: str
+    effect_val: bool
+
+type GoapPlanner:
+    actions: [GoapAction] = []
+
+    func add_action(self, act: GoapAction):
+        push(self.actions, act)
+
+    func plan(self, goal_key: str, goal_val: bool) -> [str]:
+        # returns sequence of action names
+        plan_steps = []
+        for a in self.actions:
+            if a.effect_key == goal_key and a.effect_val == goal_val:
+                push(plan_steps, a.name)
+                break
+        return plan_steps

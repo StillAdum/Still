@@ -1,0 +1,20 @@
+type ReplayFrame:
+    frame: int
+    inputs: int
+    seed: int
+
+type ReplaySession:
+    frames: [ReplayFrame] = []
+    playback_cursor: int = 0
+    is_recording: bool = true
+
+    func record_frame(self, frame: int, inputs: int, seed: int):
+        if self.is_recording:
+            push(self.frames, ReplayFrame(frame, inputs, seed))
+
+    func get_playback_frame(self) -> (bool, ReplayFrame):
+        if self.playback_cursor < len(self.frames):
+            f = self.frames[self.playback_cursor]
+            self.playback_cursor = self.playback_cursor + 1
+            return (true, f)
+        return (false, ReplayFrame(0, 0, 0))

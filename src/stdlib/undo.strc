@@ -1,0 +1,38 @@
+type Action:
+    name: str
+    target_id: str
+    prev_val: str
+    next_val: str
+
+type UndoHistory:
+    undo_stack: [Action] = []
+    redo_stack: [Action] = []
+    max_history: int = 100
+
+    func execute(self, act: Action):
+        push(self.undo_stack, act)
+        self.redo_stack = []
+        if len(self.undo_stack) > self.max_history:
+            # trim oldest
+            next_stack = []
+            for i in range(1, len(self.undo_stack)):
+                push(next_stack, self.undo_stack[i])
+            self.undo_stack = next_stack
+
+    func can_undo(self) -> bool:
+        return len(self.undo_stack) > 0
+
+    func can_redo(self) -> bool:
+        return len(self.redo_stack) > 0
+
+    func undo(self) -> Action:
+        check(len(self.undo_stack) > 0, "nothing to undo")
+        act = pop(self.undo_stack)
+        push(self.redo_stack, act)
+        return act
+
+    func redo(self) -> Action:
+        check(len(self.redo_stack) > 0, "nothing to redo")
+        act = pop(self.redo_stack)
+        push(self.undo_stack, act)
+        return act

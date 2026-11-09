@@ -1,0 +1,28 @@
+use math
+use vec
+
+type Camera2D:
+    x: float = 0.0
+    y: float = 0.0
+    zoom: float = 1.0
+    shake_trauma: float = 0.0
+
+    func follow(self, target_x: float, target_y: float, smooth_speed: float, dt: float):
+        self.x = self.x + (target_x - self.x) * smooth_speed * dt
+        self.y = self.y + (target_y - self.y) * smooth_speed * dt
+
+    func add_shake(self, trauma: float):
+        self.shake_trauma = self.shake_trauma + trauma
+        if self.shake_trauma > 1.0:
+            self.shake_trauma = 1.0
+
+    func update_shake(self, dt: float) -> (float, float):
+        if self.shake_trauma > 0.0:
+            self.shake_trauma = self.shake_trauma - dt
+            if self.shake_trauma < 0.0:
+                self.shake_trauma = 0.0
+            shake_amount = self.shake_trauma * self.shake_trauma
+            offset_x = (sin(clock() * 50.0)) * shake_amount * 10.0
+            offset_y = (cos(clock() * 60.0)) * shake_amount * 10.0
+            return (offset_x, offset_y)
+        return (0.0, 0.0)

@@ -1,0 +1,38 @@
+type Length:
+    meters: float = 0.0
+
+    func from_km(km: float) -> Length:
+        return Length(km * 1000.0)
+
+    func from_feet(ft: float) -> Length:
+        return Length(ft * 0.3048)
+
+    func to_feet(self) -> float:
+        return self.meters / 0.3048
+
+type Duration:
+    seconds: float = 0.0
+
+    func from_ms(ms: float) -> Duration:
+        return Duration(ms / 1000.0)
+
+    func from_minutes(m: float) -> Duration:
+        return Duration(m * 60.0)
+
+type Velocity:
+    meters_per_sec: float = 0.0
+
+    func from_kmh(kmh: float) -> Velocity:
+        return Velocity(kmh / 3.6)
+
+    func to_kmh(self) -> float:
+        return self.meters_per_sec * 3.6
+
+type Angle:
+    radians: float = 0.0
+
+    func from_degrees(deg: float) -> Angle:
+        return Angle(deg * 3.141592653589793 / 180.0)
+
+    func to_degrees(self) -> float:
+        return self.radians * 180.0 / 3.141592653589793

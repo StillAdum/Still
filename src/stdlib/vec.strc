@@ -1,0 +1,83 @@
+use math
+
+type Vec2:
+    x: float = 0.0
+    y: float = 0.0
+
+    func add(self, o: Vec2) -> Vec2:
+        return Vec2(self.x + o.x, self.y + o.y)
+
+    func sub(self, o: Vec2) -> Vec2:
+        return Vec2(self.x - o.x, self.y - o.y)
+
+    func scale(self, s: float) -> Vec2:
+        return Vec2(self.x * s, self.y * s)
+
+    func dot(self, o: Vec2) -> float:
+        return self.x * o.x + self.y * o.y
+
+    func length_sq(self) -> float:
+        return self.x * self.x + self.y * self.y
+
+    func length(self) -> float:
+        return sqrt(self.x * self.x + self.y * self.y)
+
+    func normalized(self) -> Vec2:
+        l = self.length()
+        if l > 0.000001:
+            return Vec2(self.x / l, self.y / l)
+        return Vec2(0.0, 0.0)
+
+type Vec3:
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+    func add(self, o: Vec3) -> Vec3:
+        return Vec3(self.x + o.x, self.y + o.y, self.z + o.z)
+
+    func sub(self, o: Vec3) -> Vec3:
+        return Vec3(self.x - o.x, self.y - o.y, self.z - o.z)
+
+    func scale(self, s: float) -> Vec3:
+        return Vec3(self.x * s, self.y * s, self.z * s)
+
+    func dot(self, o: Vec3) -> float:
+        return self.x * o.x + self.y * o.y + self.z * o.z
+
+    func cross(self, o: Vec3) -> Vec3:
+        return Vec3(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x
+        )
+
+    func length(self) -> float:
+        return sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
+
+    func normalized(self) -> Vec3:
+        l = self.length()
+        if l > 0.000001:
+            return Vec3(self.x / l, self.y / l, self.z / l)
+        return Vec3(0.0, 0.0, 0.0)
+
+type Color:
+    r: float = 1.0
+    g: float = 1.0
+    b: float = 1.0
+    a: float = 1.0
+
+    func rgba(r: float, g: float, b: float, a: float = 1.0) -> Color:
+        return Color(r, g, b, a)
+
+type Rect:
+    x: float = 0.0
+    y: float = 0.0
+    w: float = 0.0
+    h: float = 0.0
+
+    func contains(self, px: float, py: float) -> bool:
+        return px >= self.x and px <= self.x + self.w and py >= self.y and py <= self.y + self.h
+
+    func intersects(self, o: Rect) -> bool:
+        return not (self.x + self.w < o.x or o.x + o.w < self.x or self.y + self.h < o.y or o.y + o.h < self.y)

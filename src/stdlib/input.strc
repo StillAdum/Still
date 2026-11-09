@@ -1,0 +1,28 @@
+use math
+
+type InputAction:
+    name: str
+    bound_key: str
+    is_down: bool = false
+    was_pressed: bool = false
+
+type InputContext:
+    name: str
+    actions: [InputAction] = []
+
+    func bind_action(self, name: str, key: str):
+        push(self.actions, InputAction(name, key, false, false))
+
+    func is_action_pressed(self, name: str) -> bool:
+        for a in self.actions:
+            if a.name == name:
+                return a.was_pressed
+        return false
+
+func apply_deadzone(x: float, y: float, deadzone: float = 0.15) -> (float, float):
+    mag = sqrt(x * x + y * y)
+    if mag < deadzone:
+        return (0.0, 0.0)
+    # rescale
+    scale = (mag - deadzone) / (1.0 - deadzone)
+    return (x / mag * scale, y / mag * scale)

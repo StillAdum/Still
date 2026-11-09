@@ -1,0 +1,17 @@
+type AnalyticsEvent:
+    event_name: str
+    user_id: str
+    properties: {str: str}
+    timestamp: float
+
+type AnalyticsClient:
+    app_id: str
+    event_queue: [AnalyticsEvent] = []
+
+    func track(self, event_name: str, user_id: str, props: {str: str}):
+        push(self.event_queue, AnalyticsEvent(event_name, user_id, props, clock()))
+
+    func flush(self) -> int:
+        count = len(self.event_queue)
+        self.event_queue = []
+        return count

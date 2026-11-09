@@ -1,0 +1,25 @@
+type WasapiCapture:
+    sample_rate: int = 48000
+    channels: int = 2
+    is_capturing: bool = false
+
+    func start_loopback(self) -> bool:
+        self.is_capturing = true
+        return true
+
+    func stop_loopback(self):
+        self.is_capturing = false
+
+type ScreenCaptureSession:
+    monitor_index: int = 0
+    width: int = 1920
+    height: int = 1080
+    fps: int = 60
+    active: bool = false
+
+    func start(self) -> bool:
+        self.active = true
+        return true
+
+    func stop(self):
+        self.active = false

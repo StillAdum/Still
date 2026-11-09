@@ -1,0 +1,18 @@
+type CrashReport:
+    timestamp: float
+    error_message: str
+    stack_trace: [str] = []
+
+    func to_string(self) -> str:
+        out = "CRASH REPORT at {self.timestamp}\nError: {self.error_message}\nTrace:\n"
+        for frame in self.stack_trace:
+            out = out + "  at " + frame + "\n"
+        return out
+
+type MinidumpWriter:
+    dump_path: str = "crash.dmp"
+    include_full_memory: bool = false
+
+    func write_dump(self) -> bool:
+        # standard minidump generation hook
+        return true

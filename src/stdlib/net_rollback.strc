@@ -1,0 +1,39 @@
+type SavedFrame:
+    frame: int
+    state_hash: int
+    inputs: [int]
+
+type RollbackSession:
+    current_frame: int = 0
+    confirmed_frame: int = 0
+    max_prediction_frames: int = 8
+    history: [SavedFrame] = []
+    local_player: int = 0
+    num_players: int = 2
+
+    func save_state(self, frame: int, hash_val: int, inputs: [int]):
+        push(self.history, SavedFrame(frame, hash_val, inputs))
+        if len(self.history) > 64:
+            # retain last 64 frames
+            next_hist = []
+            for i in range(len(self.history) - 64, len(self.history)):
+                push(next_hist, self.history[i])
+            self.history = next_hist
+
+    func find_state(self, frame: int) -> int:
+        for sf in self.history:
+            if sf.frame == frame:
+                return sf.state_hash
+        return 0
+
+    func needs_rollback(self, remote_frame: int, remote_input: int) -> bool:
+        if remote_frame <= self.current_frame and remote_frame > self.confirmed_frame:
+            return true
+        return false
+
+    func advance(self):
+        self.current_frame = self.current_frame + 1
+
+    func confirm(self, frame: int):
+        if frame > self.confirmed_frame:
+            self.confirmed_frame = frame

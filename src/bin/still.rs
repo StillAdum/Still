@@ -1,4 +1,4 @@
-use still::{build, compile_to_c, ide_check, ide_symbols, new_project, run, test_dir, VERSION};
+use still::{build, compile_to_c, doctor, ide_check, ide_symbols, new_project, run, setup_cc, test_dir, VERSION};
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -12,6 +12,8 @@ fn usage() {
     eprintln!("  still emit-c FILE.strc [-o OUT.c] [--release]");
     eprintln!("  still test DIR");
     eprintln!("  still new NAME");
+    eprintln!("  still doctor");
+    eprintln!("  still setup-cc");
     eprintln!("  still ide symbols FILE.strc");
     eprintln!("  still ide check FILE.strc");
     eprintln!("  still version");
@@ -233,6 +235,18 @@ fn main() {
                 _ => {
                     eprintln!("unknown ide command '{}'", rest[0]);
                     exit(2);
+                }
+            }
+        }
+        "doctor" => {
+            println!("{}", doctor());
+        }
+        "setup-cc" => {
+            match setup_cc() {
+                Ok(p) => println!("ready: C compiler located at {}", p.display()),
+                Err(e) => {
+                    eprintln!("{}", e);
+                    exit(1);
                 }
             }
         }

@@ -1,0 +1,36 @@
+use math
+use vec
+
+type Bone:
+    id: int
+    name: str
+    parent_id: int
+    local_pos: Vec3
+    world_pos: Vec3
+
+type Keyframe:
+    time: float
+    pos: Vec3
+
+type AnimationClip:
+    name: str
+    duration: float
+    keyframes: [Keyframe] = []
+
+    func sample_pos(self, t: float) -> Vec3:
+        if len(self.keyframes) == 0:
+            return Vec3(0.0, 0.0, 0.0)
+        if len(self.keyframes) == 1:
+            return self.keyframes[0].pos
+        # find pair
+        for i in range(len(self.keyframes) - 1):
+            k1 = self.keyframes[i]
+            k2 = self.keyframes[i + 1]
+            if t >= k1.time and t <= k2.time:
+                factor = (t - k1.time) / (k2.time - k1.time)
+                return Vec3(
+                    k1.pos.x + (k2.pos.x - k1.pos.x) * factor,
+                    k1.pos.y + (k2.pos.y - k1.pos.y) * factor,
+                    k1.pos.z + (k2.pos.z - k1.pos.z) * factor
+                )
+        return self.keyframes[len(self.keyframes) - 1].pos

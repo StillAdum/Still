@@ -1,0 +1,13 @@
+type ReloadModule:
+    module_name: str
+    version: int = 1
+    state_payload: str = ""
+
+    func serialize_state(self, state: str):
+        self.state_payload = state
+
+    func deserialize_state(self) -> str:
+        return self.state_payload
+
+    func bump_version(self):
+        self.version = self.version + 1

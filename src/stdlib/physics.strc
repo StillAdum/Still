@@ -1,0 +1,82 @@
+use math
+use vec
+
+type Body2D:
+    x: float = 0.0
+    y: float = 0.0
+    vx: float = 0.0
+    vy: float = 0.0
+    mass: float = 1.0
+    inv_mass: float = 1.0
+    radius: float = 0.5
+    restitution: float = 0.5
+    static_body: bool = false
+
+    func integrate(self, dt: float, gx: float = 0.0, gy: float = -9.81):
+        if not self.static_body:
+            self.vx = self.vx + gx * dt
+            self.vy = self.vy + gy * dt
+            self.x = self.x + self.vx * dt
+            self.y = self.y + self.vy * dt
+
+    func apply_impulse(self, jx: float, jy: float):
+        if not self.static_body:
+            self.vx = self.vx + jx * self.inv_mass
+            self.vy = self.vy + jy * self.inv_mass
+
+type Contact2D:
+    b1_idx: int
+    b2_idx: int
+    nx: float
+    ny: float
+    penetration: float
+
+type World2D:
+    bodies: [Body2D] = []
+    gravity_x: float = 0.0
+    gravity_y: float = -9.81
+
+    func add_body(self, b: Body2D) -> int:
+        idx = len(self.bodies)
+        push(self.bodies, b)
+        return idx
+
+    func step(self, dt: float):
+        for b in self.bodies:
+            b.integrate(dt, self.gravity_x, self.gravity_y)
+
+        # resolve collisions
+        n = len(self.bodies)
+        for i in range(n):
+            for j in range(i + 1, n):
+                b1 = self.bodies[i]
+                b2 = self.bodies[j]
+                dx = b2.x - b1.x
+                dy = b2.y - b1.y
+                dist_sq = dx * dx + dy * dy
+                min_dist = b1.radius + b2.radius
+                if dist_sq < min_dist * min_dist and dist_sq > 0.000001:
+                    dist = sqrt(dist_sq)
+                    nx = dx / dist
+                    ny = dy / dist
+                    overlap = min_dist - dist
+                    
+                    # positional correction
+                    total_inv = b1.inv_mass + b2.inv_mass
+                    if total_inv > 0.0:
+                        if not b1.static_body:
+                            b1.x = b1.x - nx * overlap * (b1.inv_mass / total_inv)
+                            b1.y = b1.y - ny * overlap * (b1.inv_mass / total_inv)
+                        if not b2.static_body:
+                            b2.x = b2.x + nx * overlap * (b2.inv_mass / total_inv)
+                            b2.y = b2.y + ny * overlap * (b2.inv_mass / total_inv)
+
+                        # relative velocity
+                        rvx = b2.vx - b1.vx
+                        rvy = b2.vy - b1.vy
+                        vel_along_normal = rvx * nx + rvy * ny
+                        if vel_along_normal < 0.0:
+                            restit = (b1.restitution + b2.restitution) * 0.5
+                            j = -(1.0 + restit) * vel_along_normal / total_inv
+                            b1.apply_impulse(-nx * j, -ny * j)
+                            b2.apply_impulse(nx * j, ny * j)

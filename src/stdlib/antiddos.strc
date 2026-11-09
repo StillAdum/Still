@@ -1,0 +1,32 @@
+type TokenBucket:
+    capacity: int = 100
+    tokens: float = 100.0
+    refill_rate: float = 20.0 # tokens per second
+    last_update: float = 0.0
+
+    func try_consume(self, amount: float = 1.0) -> bool:
+        now_t = clock()
+        if self.last_update == 0.0:
+            self.last_update = now_t
+        elapsed = now_t - self.last_update
+        self.last_update = now_t
+        self.tokens = self.tokens + elapsed * self.refill_rate
+        if self.tokens > float(self.capacity):
+            self.tokens = float(self.capacity)
+        if self.tokens >= amount:
+            self.tokens = self.tokens - amount
+            return true
+        return false
+
+type AntiDdosGuard:
+    banned_ips: [str] = []
+    ip_buckets: {str: int}
+
+    func is_allowed(self, ip: str) -> bool:
+        for b in self.banned_ips:
+            if b == ip:
+                return false
+        return true
+
+    func ban_ip(self, ip: str):
+        push(self.banned_ips, ip)

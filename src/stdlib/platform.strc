@@ -1,0 +1,24 @@
+type Achievement:
+    id: str
+    name: str
+    unlocked: bool = false
+
+type PlatformServices:
+    platform_name: str = "Standalone"
+    user_id: str = "local_player"
+    user_name: str = "Player"
+    achievements: [Achievement] = []
+
+    func unlock_achievement(self, id: str) -> bool:
+        for a in self.achievements:
+            if a.id == id:
+                a.unlocked = true
+                return true
+        push(self.achievements, Achievement(id, id, true))
+        return true
+
+    func is_achievement_unlocked(self, id: str) -> bool:
+        for a in self.achievements:
+            if a.id == id:
+                return a.unlocked
+        return false

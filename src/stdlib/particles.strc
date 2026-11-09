@@ -1,0 +1,29 @@
+use vec
+
+type ParticleItem:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    life: float
+    max_life: float
+    color: Color
+
+type ParticleEmitter:
+    x: float = 0.0
+    y: float = 0.0
+    particles: [ParticleItem] = []
+    emission_rate: float = 100.0
+
+    func emit_one(self, vx: float, vy: float, life: float = 1.0, col: Color = Color(1.0, 1.0, 1.0, 1.0)):
+        push(self.particles, ParticleItem(self.x, self.y, vx, vy, life, life, col))
+
+    func update(self, dt: float):
+        alive = []
+        for p in self.particles:
+            p.life = p.life - dt
+            if p.life > 0.0:
+                p.x = p.x + p.vx * dt
+                p.y = p.y + p.vy * dt
+                push(alive, p)
+        self.particles = alive

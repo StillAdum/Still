@@ -1,0 +1,20 @@
+type ServerMetric:
+    name: str
+    value: float
+    timestamp: float
+
+type GameServerHost:
+    server_id: str
+    max_players: int = 64
+    active_players: int = 0
+    tick_rate: int = 60
+    metrics: [ServerMetric] = []
+
+    func record_metric(self, name: str, val: float):
+        push(self.metrics, ServerMetric(name, val, clock()))
+
+    func should_autoscale_up(self) -> bool:
+        return float(self.active_players) / float(self.max_players) > 0.85
+
+    func should_autoscale_down(self) -> bool:
+        return self.active_players == 0

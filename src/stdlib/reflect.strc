@@ -1,0 +1,18 @@
+type FieldMeta:
+    name: str
+    type_name: str
+    is_sync: bool = false
+
+type TypeMeta:
+    name: str
+    fields: [FieldMeta] = []
+
+    func add_field(self, name: str, ty: str, sync: bool = false):
+        push(self.fields, FieldMeta(name, ty, sync))
+
+    func get_sync_fields(self) -> [str]:
+        out = []
+        for f in self.fields:
+            if f.is_sync:
+                push(out, f.name)
+        return out

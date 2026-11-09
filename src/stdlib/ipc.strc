@@ -1,0 +1,25 @@
+type NamedPipe:
+    name: str
+    is_server: bool
+    connected: bool = false
+
+    func create_server(name: str) -> NamedPipe:
+        return NamedPipe(name, true, false)
+
+    func connect_client(name: str) -> NamedPipe:
+        return NamedPipe(name, false, true)
+
+    func write(self, msg: str) -> int:
+        return len(msg)
+
+type SharedMemorySection:
+    name: str
+    size_bytes: int
+    is_mapped: bool = false
+
+    func map(self) -> bool:
+        self.is_mapped = true
+        return true
+
+    func unmap(self):
+        self.is_mapped = false

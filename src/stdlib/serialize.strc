@@ -1,0 +1,26 @@
+func json_escape(s: str) -> str:
+    # simple clean json escaping
+    return s.replace("\"", "\\\"")
+
+func to_json_kv(key: str, val: str) -> str:
+    return "\"{key}\":\"{json_escape(val)}\""
+
+func to_json_int(key: str, val: int) -> str:
+    return "\"{key}\":{val}"
+
+func to_json_float(key: str, val: float) -> str:
+    return "\"{key}\":{val}"
+
+func to_json_bool(key: str, val: bool) -> str:
+    if val:
+        return "\"{key}\":true"
+    return "\"{key}\":false"
+
+func wrap_json_obj(items: [str]) -> str:
+    out = "{"
+    for i in range(len(items)):
+        if i > 0:
+            out = out + ","
+        out = out + items[i]
+    out = out + "}"
+    return out

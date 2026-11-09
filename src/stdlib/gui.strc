@@ -1,0 +1,120 @@
+use vec
+
+type DrawCmd:
+    kind: str
+    x: float
+    y: float
+    w: float
+    h: float
+    text: str
+    color: Color
+
+type UI:
+    cursor_x: float = 10.0
+    cursor_y: float = 10.0
+    spacing: float = 8.0
+    mouse_x: float = 0.0
+    mouse_y: float = 0.0
+    mouse_down: bool = false
+    hot_id: str = ""
+    active_id: str = ""
+    commands: [DrawCmd] = []
+
+    func begin_frame(self, mx: float, my: float, mdown: bool):
+        self.cursor_x = 10.0
+        self.cursor_y = 10.0
+        self.mouse_x = mx
+        self.mouse_y = my
+        self.mouse_down = mdown
+        self.commands = []
+
+    func end_frame(self) -> [DrawCmd]:
+        return self.commands
+
+    func label(self, text: str, col: Color = Color(1.0, 1.0, 1.0, 1.0)):
+        cmd = DrawCmd("text", self.cursor_x, self.cursor_y, 0.0, 20.0, text, col)
+        push(self.commands, cmd)
+        self.cursor_y = self.cursor_y + 24.0
+
+    func button(self, id: str, text: str, w: float = 120.0, h: float = 30.0) -> bool:
+        bx = self.cursor_x
+        by = self.cursor_y
+        hover = (self.mouse_x >= bx and self.mouse_x <= bx + w and self.mouse_y >= by and self.mouse_y <= by + h)
+        clicked = false
+        col = Color(0.2, 0.2, 0.25, 1.0)
+        if hover:
+            col = Color(0.3, 0.3, 0.4, 1.0)
+            if self.mouse_down:
+                col = Color(0.4, 0.4, 0.6, 1.0)
+                clicked = true
+        bg = DrawCmd("rect", bx, by, w, h, "", col)
+        push(self.commands, bg)
+        txt = DrawCmd("text", bx + 8.0, by + 6.0, w, h, text, Color(1.0, 1.0, 1.0, 1.0))
+        push(self.commands, txt)
+        self.cursor_y = self.cursor_y + h + self.spacing
+        return clicked
+
+    func slider(self, id: str, val: float, min_val: float, max_val: float, w: float = 150.0) -> float:
+        bx = self.cursor_x
+        by = self.cursor_y
+        h = 16.0
+        ratio = (val - min_val) / (max_val - min_val)
+        if ratio < 0.0:
+            ratio = 0.0
+        if ratio > 1.0:
+            ratio = 1.0
+        bg = DrawCmd("rect", bx, by, w, h, "", Color(0.15, 0.15, 0.18, 1.0))
+        push(self.commands, bg)
+        fill = DrawCmd("rect", bx, by, w * ratio, h, "", Color(0.2, 0.5, 0.8, 1.0))
+        push(self.commands, fill)
+        if self.mouse_x >= bx and self.mouse_x <= bx + w and self.mouse_y >= by and self.mouse_y <= by + h:
+            if self.mouse_down:
+                new_ratio = (self.mouse_x - bx) / w
+                val = min_val + new_ratio * (max_val - min_val)
+        self.cursor_y = self.cursor_y + h + self.spacing
+        return val
+
+    func checkbox(self, id: str, label: str, checked: bool) -> bool:
+        bx = self.cursor_x
+        by = self.cursor_y
+        size = 18.0
+        bg_col = Color(0.2, 0.2, 0.25, 1.0)
+        clicked = false
+        if self.mouse_x >= bx and self.mouse_x <= bx + size and self.mouse_y >= by and self.mouse_y <= by + size:
+            if self.mouse_down:
+                clicked = true
+                checked = not checked
+        bg = DrawCmd("rect", bx, by, size, size, "", bg_col)
+        push(self.commands, bg)
+        if checked:
+            mark = DrawCmd("rect", bx + 4.0, by + 4.0, size - 8.0, size - 8.0, "", Color(0.1, 0.8, 0.3, 1.0))
+            push(self.commands, mark)
+        lbl = DrawCmd("text", bx + size + 8.0, by, 0.0, size, label, Color(1.0, 1.0, 1.0, 1.0))
+        push(self.commands, lbl)
+        self.cursor_y = self.cursor_y + size + self.spacing
+        return checked
+
+    func separator(self, w: float = 200.0):
+        sep = DrawCmd("rect", self.cursor_x, self.cursor_y, w, 1.0, "", Color(0.3, 0.3, 0.35, 1.0))
+        push(self.commands, sep)
+        self.cursor_y = self.cursor_y + 8.0
+
+type Widget:
+    id: str
+    x: float = 0.0
+    y: float = 0.0
+    w: float = 100.0
+    h: float = 30.0
+    text: str = ""
+    visible: bool = true
+
+type Window:
+    title: str = "Window"
+    x: float = 50.0
+    y: float = 50.0
+    w: float = 300.0
+    h: float = 200.0
+    widgets: [Widget] = []
+
+    func add_widget(self, w: Widget):
+        push(self.widgets, w)

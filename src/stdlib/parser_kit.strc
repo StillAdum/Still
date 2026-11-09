@@ -1,0 +1,45 @@
+type ParseResult:
+    matched: bool
+    consumed: int
+    value: str
+
+type SimpleParser:
+    input: str
+    cursor: int = 0
+
+    func expect_char(self, ch: str) -> bool:
+        if self.cursor < len(self.input):
+            if self.input[self.cursor] == ch:
+                self.cursor = self.cursor + 1
+                return true
+        return false
+
+    func expect_word(self, word: str) -> bool:
+        w_len = len(word)
+        if self.cursor + w_len <= len(self.input):
+            sub = self.input[self.cursor:self.cursor + w_len]
+            if sub == word:
+                self.cursor = self.cursor + w_len
+                return true
+        return false
+
+    func parse_int(self) -> (bool, int):
+        start = self.cursor
+        while self.cursor < len(self.input):
+            c = self.input[self.cursor]
+            if c >= "0" and c <= "9":
+                self.cursor = self.cursor + 1
+            else:
+                break
+        if self.cursor > start:
+            val = int(self.input[start:self.cursor])
+            return (true, val)
+        return (false, 0)
+
+    func skip_whitespace(self):
+        while self.cursor < len(self.input):
+            c = self.input[self.cursor]
+            if c == " " or c == "\t" or c == "\n" or c == "\r":
+                self.cursor = self.cursor + 1
+            else:
+                break

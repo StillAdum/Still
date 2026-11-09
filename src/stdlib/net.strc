@@ -1,0 +1,64 @@
+type Packet:
+    seq: int
+    ack: int
+    ack_bits: int
+    payload: str
+    channel: int = 0
+
+type ReliableChannel:
+    local_seq: int = 0
+    remote_seq: int = 0
+    ack_bits: int = 0
+    pending: [Packet] = []
+
+    func send(self, payload: str, ch: int = 0) -> Packet:
+        self.local_seq = self.local_seq + 1
+        pkt = Packet(self.local_seq, self.remote_seq, self.ack_bits, payload, ch)
+        push(self.pending, pkt)
+        return pkt
+
+    func on_receive(self, pkt: Packet):
+        if pkt.seq > self.remote_seq:
+            shift = pkt.seq - self.remote_seq
+            if shift < 32:
+                self.ack_bits = (self.ack_bits << shift) | 1
+            else:
+                self.ack_bits = 1
+            self.remote_seq = pkt.seq
+        else:
+            diff = self.remote_seq - pkt.seq
+            if diff < 32:
+                self.ack_bits = self.ack_bits | (1 << diff)
+
+type Lobby:
+    id: str
+    name: str
+    max_players: int = 8
+    players: [str] = []
+    host: str = ""
+
+    func join(self, player_id: str) -> bool:
+        if len(self.players) >= self.max_players:
+            return false
+        push(self.players, player_id)
+        if self.host == "":
+            self.host = player_id
+        return true
+
+    func leave(self, player_id: str):
+        next_players = []
+        for p in self.players:
+            if p != player_id:
+                push(next_players, p)
+        self.players = next_players
+        if self.host == player_id and len(self.players) > 0:
+            self.host = self.players[0]
+
+func serialize_packet(pkt: Packet) -> str:
+    return "{pkt.seq}:{pkt.ack}:{pkt.ack_bits}:{pkt.channel}:{pkt.payload}"
+
+func parse_packet(data: str) -> Packet:
+    parts = data.split(":")
+    if len(parts) >= 5:
+        return Packet(int(parts[0]), int(parts[1]), int(parts[2]), parts[4], int(parts[3]))
+    return Packet(0, 0, 0, "")

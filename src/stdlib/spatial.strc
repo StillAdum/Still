@@ -1,0 +1,42 @@
+use vec
+
+type SpatialItem:
+    id: int
+    x: float
+    y: float
+    radius: float
+
+type SpatialGrid2D:
+    cell_size: float = 10.0
+    items: [SpatialItem] = []
+
+    func add(self, id: int, x: float, y: float, r: float):
+        push(self.items, SpatialItem(id, x, y, r))
+
+    func query_range(self, qx: float, qy: float, range_dist: float) -> [int]:
+        res = []
+        r_sq = range_dist * range_dist
+        for it in self.items:
+            dx = it.x - qx
+            dy = it.y - qy
+            if dx * dx + dy * dy <= r_sq:
+                push(res, it.id)
+        return res
+
+type AABB3D:
+    min_x: float
+    min_y: float
+    min_z: float
+    max_x: float
+    max_y: float
+    max_z: float
+
+    func contains_point(self, px: float, py: float, pz: float) -> bool:
+        return (px >= self.min_x and px <= self.max_x and
+                py >= self.min_y and py <= self.max_y and
+                pz >= self.min_z and pz <= self.max_z)
+
+    func intersects(self, o: AABB3D) -> bool:
+        return not (self.max_x < o.min_x or o.max_x < self.min_x or
+                    self.max_y < o.min_y or o.max_y < self.min_y or
+                    self.max_z < o.min_z or o.max_z < self.min_z)

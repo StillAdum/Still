@@ -1,0 +1,19 @@
+type LocalizationTable:
+    current_locale: str = "en"
+    translations: {str: str}
+
+    func set_locale(self, loc: str):
+        self.current_locale = loc
+
+    func set_translation(self, key: str, text: str):
+        self.translations[key] = text
+
+    func translate(self, key: str, fallback: str = "") -> str:
+        if key in self.translations:
+            return self.translations[key]
+        if fallback != "":
+            return fallback
+        return key
+
+func is_rtl(locale: str) -> bool:
+    return locale == "ar" or locale == "he" or locale == "fa" or locale == "ur"

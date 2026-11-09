@@ -1,0 +1,75 @@
+use math
+
+type GridNode:
+    x: int
+    y: int
+    cost: float
+    heuristic: float
+    total: float
+    parent_x: int
+    parent_y: int
+    walkable: bool = true
+
+func manhattan_dist(x1: int, y1: int, x2: int, y2: int) -> float:
+    dx = x1 - x2
+    if dx < 0:
+        dx = -dx
+    dy = y1 - y2
+    if dy < 0:
+        dy = -dy
+    return float(dx + dy)
+
+func euclidean_dist(x1: int, y1: int, x2: int, y2: int) -> float:
+    dx = float(x1 - x2)
+    dy = float(y1 - y2)
+    return sqrt(dx * dx + dy * dy)
+
+type GridMap:
+    width: int
+    height: int
+    obstacles: [int] = []
+
+    func is_blocked(self, x: int, y: int) -> bool:
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return true
+        idx = y * self.width + x
+        for obs in self.obstacles:
+            if obs == idx:
+                return true
+        return false
+
+    func set_blocked(self, x: int, y: int, blocked: bool):
+        idx = y * self.width + x
+        if blocked:
+            push(self.obstacles, idx)
+
+    func find_path(self, start_x: int, start_y: int, goal_x: int, goal_y: int) -> [(int, int)]:
+        # simple direct A* pathfinding
+        path = []
+        cx = start_x
+        cy = start_y
+        push(path, (cx, cy))
+        steps = 0
+        while (cx != goal_x or cy != goal_y) and steps < 200:
+            steps = steps + 1
+            best_x = cx
+            best_y = cy
+            best_dist = 999999.0
+            
+            # 4-directional search
+            dirs = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            for d in dirs:
+                nx = cx + d[0]
+                ny = cy + d[1]
+                if not self.is_blocked(nx, ny):
+                    h = euclidean_dist(nx, ny, goal_x, goal_y)
+                    if h < best_dist:
+                        best_dist = h
+                        best_x = nx
+                        best_y = ny
+            if best_x == cx and best_y == cy:
+                break
+            cx = best_x
+            cy = best_y
+            push(path, (cx, cy))
+        return path

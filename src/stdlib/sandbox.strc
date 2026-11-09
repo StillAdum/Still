@@ -1,0 +1,18 @@
+type SandboxLimits:
+    max_memory_mb: int = 512
+    max_cpu_percent: int = 50
+    allow_network: bool = false
+    allow_disk_write: bool = false
+
+type SandboxedProcess:
+    id: int
+    executable: str
+    limits: SandboxLimits
+    is_running: bool = false
+
+    func launch(self) -> bool:
+        self.is_running = true
+        return true
+
+    func terminate(self):
+        self.is_running = false

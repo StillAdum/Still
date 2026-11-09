@@ -1,0 +1,26 @@
+type DxrGeometry:
+    vertex_count: int
+    index_count: int
+    is_opaque: bool = true
+
+type DxrAccelerationStructure:
+    level: str # "bottom" or "top"
+    geometries: [DxrGeometry] = []
+
+    func add_geometry(self, g: DxrGeometry):
+        push(self.geometries, g)
+
+type DirectStorageQueue:
+    capacity: int = 128
+    pending_requests: int = 0
+
+    func enqueue_read(self, file_offset: int, size: int) -> bool:
+        if self.pending_requests < self.capacity:
+            self.pending_requests = self.pending_requests + 1
+            return true
+        return false
+
+type DirectMlTensor:
+    dim_x: int
+    dim_y: int
+    data_type: str = "float32"

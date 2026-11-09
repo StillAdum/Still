@@ -1,0 +1,35 @@
+type Signal:
+    id: str
+    value_str: str = ""
+    value_num: float = 0.0
+    dirty: bool = false
+    subscriber_count: int = 0
+
+    func set_str(self, val: str):
+        if self.value_str != val:
+            self.value_str = val
+            self.dirty = true
+
+    func set_num(self, val: float):
+        if self.value_num != val:
+            self.value_num = val
+            self.dirty = true
+
+    func consume_dirty(self) -> bool:
+        was_dirty = self.dirty
+        self.dirty = false
+        return was_dirty
+
+type ReactiveStore:
+    signals: [Signal] = []
+
+    func create_signal(self, id: str, init_val: float = 0.0) -> Signal:
+        sig = Signal(id, "", init_val, false, 0)
+        push(self.signals, sig)
+        return sig
+
+    func find_signal(self, id: str) -> Signal:
+        for s in self.signals:
+            if s.id == id:
+                return s
+        return Signal("none", "", 0.0, false, 0)

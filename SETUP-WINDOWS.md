@@ -1,26 +1,23 @@
 # Still on Windows — Setup
 
 Still is a compiled language that reads like Python and runs like C. This guide
-gets it running on Windows 10/11 (64-bit) in a few minutes.
+gets it running on Windows 10/11 (64-bit) in seconds — with NO heavy C++ development kits required!
 
 ## 1. Requirements
 
 - Windows 10 or 11, 64-bit
-- The Still compiler: `still-v0.2.0-windows-x64.zip` (attached to the same
-  release you downloaded this from)
-- A C compiler — Still generates C11 and drives your system compiler:
-  - **Recommended: Visual Studio Build Tools 2022** (free, no Visual Studio IDE needed)
-    1. Download from <https://visualstudio.microsoft.com/visual-cpp-build-tools/>
-    2. Run the installer
-    3. Check **"Desktop development with C++"**
-    4. Click Install (MSVC v143 + Windows SDK are checked automatically)
-  - **Alternative: WinLibs GCC** — download the x86_64 zip from
-    <https://winlibs.com/>, extract it, and put its `bin` folder on your PATH
-- Rust is **not** required — `still.exe` is prebuilt
+- The Still compiler: `still.exe`
+- A C compiler — Still generates clean, standard C11:
+  - **No Visual Studio / C++ Build Tools required!** Still does not compile C++; it compiles pure C.
+  - **Option A (Instant, 2MB): TinyCC (TCC)**
+    Run `still setup-cc` to automatically download a 2MB standalone C compiler directly into `~/.still/bin/`.
+  - **Option B (Recommended for Production): WinLibs GCC or Clang**
+    Download the portable GCC zip from <https://winlibs.com/>, extract it, and put its `bin` folder on your PATH.
+  - **Option C: Visual Studio Build Tools (Optional)**
+    If you already have MSVC installed, Still detects `cl.exe` automatically.
+- Total footprint is well under 100MB (far below the 2GB budget!). Rust is **not** required.
 
-Still finds your C compiler automatically: it looks for gcc/clang/cl on PATH,
-and if nothing is there it locates Visual Studio Build Tools by itself
-(vswhere). No "developer command prompt" needed.
+Still finds your C compiler automatically: checks `~/.still/bin/` (TCC/GCC), system PATH (tcc, clang, gcc, cc, zig), or MSVC if present.
 
 ## 2. Install the compiler
 

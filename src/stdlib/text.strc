@@ -1,0 +1,58 @@
+func levenshtein(s1: str, s2: str) -> int:
+    m = len(s1)
+    n = len(s2)
+    if m == 0:
+        return n
+    if n == 0:
+        return m
+
+    # previous and current row of distances
+    v0 = []
+    v1 = []
+    for i in range(n + 1):
+        push(v0, i)
+        push(v1, 0)
+
+    for i in range(m):
+        v1[0] = i + 1
+        for j in range(n):
+            sub_cost = 0
+            if s1[i] != s2[j]:
+                sub_cost = 1
+            del_cost = v0[j + 1] + 1
+            ins_cost = v1[j] + 1
+            match_cost = v0[j] + sub_cost
+            min_c = del_cost
+            if ins_cost < min_c:
+                min_c = ins_cost
+            if match_cost < min_c:
+                min_c = match_cost
+            v1[j + 1] = min_c
+        for k in range(n + 1):
+            v0[k] = v1[k]
+
+    return v0[n]
+
+func fuzzy_search(query: str, items: [str], max_dist: int = 2) -> [str]:
+    matches = []
+    for item in items:
+        d = levenshtein(query, item)
+        if d <= max_dist:
+            push(matches, item)
+    return matches
+
+type TextRopeNode:
+    text: str
+    weight: int
+
+type TextRope:
+    nodes: [TextRopeNode] = []
+
+    func append(self, s: str):
+        push(self.nodes, TextRopeNode(s, len(s)))
+
+    func to_string(self) -> str:
+        res = ""
+        for n in self.nodes:
+            res = res + n.text
+        return res

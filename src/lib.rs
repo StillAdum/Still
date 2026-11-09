@@ -6,6 +6,8 @@ pub mod lexer;
 pub mod parser;
 pub mod span;
 
+pub use cc::{doctor, setup_cc};
+
 use check::{check_program, ModSrc};
 use span::Diag;
 use std::collections::{HashMap, HashSet};
@@ -19,6 +21,47 @@ pub const STD_RANDOM: &str = include_str!("stdlib/random.strc");
 pub const STD_TIME: &str = include_str!("stdlib/time.strc");
 pub const STD_IO: &str = include_str!("stdlib/io.strc");
 pub const STD_OS: &str = include_str!("stdlib/os.strc");
+pub const STD_VEC: &str = include_str!("stdlib/vec.strc");
+pub const STD_GUI: &str = include_str!("stdlib/gui.strc");
+pub const STD_NET: &str = include_str!("stdlib/net.strc");
+pub const STD_NET_ROLLBACK: &str = include_str!("stdlib/net_rollback.strc");
+pub const STD_AUDIO: &str = include_str!("stdlib/audio.strc");
+pub const STD_PHYSICS: &str = include_str!("stdlib/physics.strc");
+pub const STD_PATHFINDING: &str = include_str!("stdlib/pathfinding.strc");
+pub const STD_WEB: &str = include_str!("stdlib/web.strc");
+pub const STD_REFLECT: &str = include_str!("stdlib/reflect.strc");
+pub const STD_SERIALIZE: &str = include_str!("stdlib/serialize.strc");
+pub const STD_DSL: &str = include_str!("stdlib/dsl.strc");
+pub const STD_UNITS: &str = include_str!("stdlib/units.strc");
+pub const STD_FIXED: &str = include_str!("stdlib/fixed.strc");
+pub const STD_UNDO: &str = include_str!("stdlib/undo.strc");
+pub const STD_REACTIVE: &str = include_str!("stdlib/reactive.strc");
+pub const STD_SPATIAL: &str = include_str!("stdlib/spatial.strc");
+pub const STD_ARENA: &str = include_str!("stdlib/arena.strc");
+pub const STD_TEXT: &str = include_str!("stdlib/text.strc");
+pub const STD_PARSER_KIT: &str = include_str!("stdlib/parser_kit.strc");
+pub const STD_WIN32: &str = include_str!("stdlib/win32.strc");
+pub const STD_DIRECTX: &str = include_str!("stdlib/directx.strc");
+pub const STD_MEDIA: &str = include_str!("stdlib/media.strc");
+pub const STD_IPC: &str = include_str!("stdlib/ipc.strc");
+pub const STD_DEBUG: &str = include_str!("stdlib/debug.strc");
+pub const STD_HOTRELOAD: &str = include_str!("stdlib/hotreload.strc");
+pub const STD_SANDBOX: &str = include_str!("stdlib/sandbox.strc");
+pub const STD_ANIMATION: &str = include_str!("stdlib/animation.strc");
+pub const STD_PARTICLES: &str = include_str!("stdlib/particles.strc");
+pub const STD_PROCGEN: &str = include_str!("stdlib/procgen.strc");
+pub const STD_GAME_SYSTEMS: &str = include_str!("stdlib/game_systems.strc");
+pub const STD_AI: &str = include_str!("stdlib/ai.strc");
+pub const STD_I18N: &str = include_str!("stdlib/i18n.strc");
+pub const STD_SAVE: &str = include_str!("stdlib/save.strc");
+pub const STD_INPUT: &str = include_str!("stdlib/input.strc");
+pub const STD_CAMERA: &str = include_str!("stdlib/camera.strc");
+pub const STD_REPLAY: &str = include_str!("stdlib/replay.strc");
+pub const STD_PLATFORM: &str = include_str!("stdlib/platform.strc");
+pub const STD_MODDING: &str = include_str!("stdlib/modding.strc");
+pub const STD_SERVER: &str = include_str!("stdlib/server.strc");
+pub const STD_ANALYTICS: &str = include_str!("stdlib/analytics.strc");
+pub const STD_ANTIDDOS: &str = include_str!("stdlib/antiddos.strc");
 
 pub fn std_modules() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -28,6 +71,47 @@ pub fn std_modules() -> Vec<(&'static str, &'static str)> {
         ("time", STD_TIME),
         ("io", STD_IO),
         ("os", STD_OS),
+        ("vec", STD_VEC),
+        ("gui", STD_GUI),
+        ("net", STD_NET),
+        ("net_rollback", STD_NET_ROLLBACK),
+        ("audio", STD_AUDIO),
+        ("physics", STD_PHYSICS),
+        ("pathfinding", STD_PATHFINDING),
+        ("web", STD_WEB),
+        ("reflect", STD_REFLECT),
+        ("serialize", STD_SERIALIZE),
+        ("dsl", STD_DSL),
+        ("units", STD_UNITS),
+        ("fixed", STD_FIXED),
+        ("undo", STD_UNDO),
+        ("reactive", STD_REACTIVE),
+        ("spatial", STD_SPATIAL),
+        ("arena", STD_ARENA),
+        ("text", STD_TEXT),
+        ("parser_kit", STD_PARSER_KIT),
+        ("win32", STD_WIN32),
+        ("directx", STD_DIRECTX),
+        ("media", STD_MEDIA),
+        ("ipc", STD_IPC),
+        ("debug", STD_DEBUG),
+        ("hotreload", STD_HOTRELOAD),
+        ("sandbox", STD_SANDBOX),
+        ("animation", STD_ANIMATION),
+        ("particles", STD_PARTICLES),
+        ("procgen", STD_PROCGEN),
+        ("game_systems", STD_GAME_SYSTEMS),
+        ("ai", STD_AI),
+        ("i18n", STD_I18N),
+        ("save", STD_SAVE),
+        ("input", STD_INPUT),
+        ("camera", STD_CAMERA),
+        ("replay", STD_REPLAY),
+        ("platform", STD_PLATFORM),
+        ("modding", STD_MODDING),
+        ("server", STD_SERVER),
+        ("analytics", STD_ANALYTICS),
+        ("antiddos", STD_ANTIDDOS),
     ]
 }
 

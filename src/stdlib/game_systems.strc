@@ -1,0 +1,49 @@
+type DialogueChoice:
+    text: str
+    next_node_id: str
+
+type DialogueNode:
+    id: str
+    speaker: str
+    text: str
+    choices: [DialogueChoice] = []
+
+type Quest:
+    id: str
+    title: str
+    description: str
+    completed: bool = false
+    progress: int = 0
+    target: int = 1
+
+    func advance(self, amount: int = 1):
+        self.progress = self.progress + amount
+        if self.progress >= self.target:
+            self.completed = true
+
+type InventoryItem:
+    id: str
+    name: str
+    count: int = 1
+    weight: float = 1.0
+
+type Inventory:
+    max_weight: float = 100.0
+    items: [InventoryItem] = []
+
+    func add_item(self, id: str, name: str, count: int = 1, weight: float = 1.0) -> bool:
+        # check stacking
+        for it in self.items:
+            if it.id == id:
+                it.count = it.count + count
+                return true
+        push(self.items, InventoryItem(id, name, count, weight))
+        return true
+
+    func remove_item(self, id: str, count: int = 1) -> bool:
+        for it in self.items:
+            if it.id == id:
+                if it.count >= count:
+                    it.count = it.count - count
+                    return true
+        return false

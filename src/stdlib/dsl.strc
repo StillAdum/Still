@@ -1,0 +1,53 @@
+type ShaderBuilder:
+    vertex_inputs: [str] = []
+    uniforms: [str] = []
+    main_body: [str] = []
+
+    func add_input(self, name: str, ty: str):
+        push(self.vertex_inputs, "layout(location = {len(self.vertex_inputs)}) in {ty} {name};")
+
+    func add_uniform(self, name: str, ty: str):
+        push(self.uniforms, "uniform {ty} {name};")
+
+    func add_code(self, line: str):
+        push(self.main_body, line)
+
+    func build_glsl(self) -> str:
+        res = "#version 330 core\n"
+        for inp in self.vertex_inputs:
+            res = res + inp + "\n"
+        for u in self.uniforms:
+            res = res + u + "\n"
+        res = res + "void main() {\n"
+        for line in self.main_body:
+            res = res + "    " + line + "\n"
+        res = res + "}\n"
+        return res
+
+type SqlBuilder:
+    table_name: str
+    selected_cols: [str] = []
+    where_clauses: [str] = []
+
+    func select(self, col: str):
+        push(self.selected_cols, col)
+
+    func where_clause(self, condition: str):
+        push(self.where_clauses, condition)
+
+    func build(self) -> str:
+        cols = "*"
+        if len(self.selected_cols) > 0:
+            cols = ""
+            for i in range(len(self.selected_cols)):
+                if i > 0:
+                    cols = cols + ", "
+                cols = cols + self.selected_cols[i]
+        q = "SELECT {cols} FROM {self.table_name}"
+        if len(self.where_clauses) > 0:
+            q = q + " WHERE "
+            for i in range(len(self.where_clauses)):
+                if i > 0:
+                    q = q + " AND "
+                q = q + self.where_clauses[i]
+        return q + ";"
