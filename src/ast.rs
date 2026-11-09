@@ -532,6 +532,8 @@ pub fn annot_to_ty(a: &TypeAnnot, structs: &HashMap<String, StructInfo>) -> Resu
         TypeAnnot::Named(n) => {
             if structs.contains_key(n) {
                 Ty::Named(n.clone())
+            } else if let Some((qual, _)) = structs.iter().find(|(k, _)| k.ends_with(&format!("::{}", n)) || k.as_str() == n) {
+                Ty::Named(qual.clone())
             } else {
                 return Err(format!("unknown type '{}'", n));
             }

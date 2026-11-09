@@ -250,6 +250,22 @@ impl Checker {
         for qual in &quals {
             let td = self.types[qual].clone();
             let module = qual.split("::").next().unwrap().to_string();
+            self.prog.structs.insert(
+                qual.clone(),
+                StructInfo {
+                    module,
+                    name: td.name.clone(),
+                    fields: Vec::new(),
+                    defaults: Vec::new(),
+                    is_soa: td.is_soa(),
+                    methods: Vec::new(),
+                    exported: td.attrs.iter().any(|a| a == "export"),
+                },
+            );
+        }
+        for qual in &quals {
+            let td = self.types[qual].clone();
+            let module = qual.split("::").next().unwrap().to_string();
             let mut fields: Vec<(String, Ty)> = Vec::new();
             let mut defaults: Vec<Option<Tx>> = Vec::new();
             for f in &td.fields {
