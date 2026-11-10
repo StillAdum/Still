@@ -115,7 +115,6 @@ impl Parser {
                     attrs.push(name);
                     self.bump();
                 }
-                _ => {}
                 _ => {
                     let t = self.cur();
                     self.error(&t.span, "expected attribute name after @".into());

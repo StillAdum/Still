@@ -110,7 +110,7 @@ impl Emitter {
     fn run(&mut self) {
         let inits = self.prog.module_inits.clone();
         let mut init_names = Vec::new();
-        for (m, cs) in &inits {
+        for (m, _cs) in &inits {
             let name = format!("still_mod_{}__init", sanitize(m));
             init_names.push(name.clone());
             self.protos.push_str(&format!("static void {}(void);\n", name));
@@ -1034,7 +1034,6 @@ impl Emitter {
                 let c = self.emit_expr(cond);
                 let t = self.truthy(&resolve_deep(&cond.ty), &c);
                 self.line(format!("if (!({})) {{", t));
-                let n = self.temps.len();
                 self.drop_temps_to(tmark);
                 self.last_line += 1;
                 self.line("break;".into());
@@ -1204,7 +1203,7 @@ impl Emitter {
             CS::ForPairs { list, avar, bvar, body } => {
                 self.bp(&list.span);
                 let lty = resolve_deep(&list.ty);
-                let (et, ltag) = match &lty {
+                let (et, _ltag) = match &lty {
                     Ty::List(e) => {
                         let et = resolve_deep(e);
                         let tg = ty_tag(&et);
@@ -2132,7 +2131,7 @@ impl Emitter {
                         self.reg_temp(&t, Ty::Str);
                         t
                     }
-                    Ty::Tuple(ts) => match &idx.x {
+                    Ty::Tuple(_ts) => match &idx.x {
                         X::Int(k) => format!("{}.f{}", oe, k),
                         _ => format!("{}", oe),
                     },
@@ -2846,7 +2845,6 @@ impl Emitter {
                         Ty::List(e) => resolve_deep(e),
                         _ => Ty::Int,
                     };
-                    let tag = ty_tag(&et);
                     let t = self.newtmp();
                     self.line(format!(
                         "if ({}->len == 0) still_panic(__FILE__, __LINE__, \"{} of an empty list\");",

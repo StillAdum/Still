@@ -62,10 +62,6 @@ impl Ctx {
         self.scopes.last_mut().unwrap().insert(name.to_string(), id);
         id
     }
-
-    fn in_current_scope(&self, name: &str) -> bool {
-        self.scopes.last().unwrap().contains_key(name)
-    }
 }
 
 pub struct Checker {
@@ -421,7 +417,7 @@ impl Checker {
         out
     }
 
-    fn check_top(&mut self, ctx: &mut Ctx, s: &Stmt, out: &mut Vec<CS>, module: &str) {
+    fn check_top(&mut self, ctx: &mut Ctx, s: &Stmt, out: &mut Vec<CS>, _module: &str) {
         match s {
             Stmt::FuncDef(_) | Stmt::TypeDef(_) | Stmt::Extern(_) | Stmt::Use { .. } => {}
             _ => {
@@ -1200,7 +1196,7 @@ impl Checker {
         None
     }
 
-    fn infer_index(&mut self, ctx: &mut Ctx, obj: &Expr, idx: &Expr, sp: &Span, whole: &Expr) -> Option<Tx> {
+    fn infer_index(&mut self, ctx: &mut Ctx, obj: &Expr, idx: &Expr, sp: &Span, _whole: &Expr) -> Option<Tx> {
         if let Expr::Member(o, fname, _) = obj {
             let ot = self.infer(ctx, o)?;
             if let Ty::Named(qual) = resolve(&ot.ty) {
@@ -1401,7 +1397,7 @@ impl Checker {
                 None
             }
             Expr::Member(obj, mname, msp) => {
-                if let Expr::Ident(base, bsp) = obj.as_ref() {
+                if let Expr::Ident(base, _) = obj.as_ref() {
                     let module = ctx.module.clone();
                     if ctx.lookup(base).is_none() {
                         // Static method on a type itself: Length.from_km(5.0).
@@ -1911,7 +1907,7 @@ impl Checker {
         }
     }
 
-    fn builtin_method(&mut self, recv: Tx, name: &str, mut args: Vec<Tx>, sp: &Span) -> Option<Tx> {
+    fn builtin_method(&mut self, recv: Tx, name: &str, args: Vec<Tx>, sp: &Span) -> Option<Tx> {
         let rt = resolve(&recv.ty);
         let m = |x: X, ty: Ty| Some(Tx { ty, span: sp.clone(), x });
         match &rt {
