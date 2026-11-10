@@ -2423,7 +2423,6 @@ impl Checker {
                     }
                     ctx.global_names.insert(name.clone());
                 }
-                Some(())
             }
             Stmt::Break(sp) => {
                 if ctx.loops == 0 {
@@ -2777,7 +2776,7 @@ impl Checker {
                     return Some(());
                 }
                 if let Some(cname) = self.gmap.get(&(module.clone(), name.clone())).cloned() {
-                    if ctx.in_fn && !ctx.global_names.contains(&name) {
+                    if ctx.in_fn && !ctx.global_names.contains(name) {
                         let id = ctx.declare(name, vt.ty.clone());
                         out.push(CS::Decl { local: id, name: name.clone(), ty: vt.ty.clone(), value: Some(vt) });
                         return Some(());

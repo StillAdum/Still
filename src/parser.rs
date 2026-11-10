@@ -1542,6 +1542,7 @@ pub fn kw_str(k: &crate::lexer::Kw) -> &'static str {
         None => "none",
         Pass => "pass",
         As => "as",
+        Global => "global",
     }
 }
 
