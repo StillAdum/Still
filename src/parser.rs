@@ -1160,7 +1160,7 @@ impl Parser {
                                 return None;
                             }
                             self.bump();
-                            e = Expr::Index(Box::new(e), Box::new(idx), sp);
+                            e = Expr::Index(Box::new(e), Box::new(idx), sp.clone());
                         }
                     }
                     if sliced {
