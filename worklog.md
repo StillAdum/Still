@@ -59,7 +59,7 @@ cargo test --release
 - Functions: `func f(a, b):` — unannotated params = implicit generics, monomorphized per call-site types (instantiation cache keyed by resolved arg types). Defaults `b = "x"` must be const (type inferred from the default). `-> T` optional. Self-recursion with unknown return type works via the same-Var-cell→Int heuristic in arith; mutual recursion via compare/arith constraints. Uncalled generics are not checked (documented).
 - Methods: `type P:` fields (with defaults) + `func m(self, ...)`. Call `p.m(...)`. Structs are VALUES (copy on assign; lists/dicts/strs/SoA are shared refs). Struct cycles through values rejected. Static type methods: a `func` with NO `self` inside a `type` block is callable on the type name itself — `Length.from_km(5.0)` — and resolves bare through a `use`d module too.
 - `@soa type Part:` → `Part(cap)` refcounted parallel-arrays collection: `parts.push(x, y, ...)`, `parts.x[i]` read/write, `len(parts)`, `parts.clear()`, `for i in parts` (indexes). Fields must be int/float/bool/str.
-- Builtins: print len push pop keys pairs str int float bool abs min max sum range enumerate reversed type_of input clock rand seed check fail exit ord chr read_file write_file get_env sleep_ms. Methods: list .push/.pop/.len/.clear; str .len/.upper/.lower/.trim/.contains/.starts/.ends/.split/.replace; dict .len/.clear; soa .push/.clear/.len.
+- Builtins: print len push pop keys pairs str int float bool abs min max sum range enumerate reversed type_of input clock rand seed check fail exit ord chr read_file write_file get_env sleep_ms args. Methods: list .push/.pop/.len/.clear; str .len/.upper/.lower/.trim/.contains/.starts/.ends/.split/.replace; dict .len/.clear; soa .push/.clear/.len. Slices `xs[a:b:c]` with full Python semantics (omitted bounds become STILL_SLICE_NONE sentinels at emit, not 0/len — a negative step reads them as covered-from-the-top; step 0 is an error confined to the step path); `args()` returns argv INCLUDING the program name at [0] (sys.argv rule), captured via still_args_init in the generated main() prologue.
 - `for x in list|str|dict(keys)|range|soa`, `for i, x in enumerate(list)`, `for k, v in pairs(dict)` (also any list of 2-tuples). Loop var assignment is an error.
 - Multi-assign/swap `a, b = b, a` (emits temp tuple unless all targets fresh), multi-return `return a, b`, tuple index `t.0`.
 - `print` is Python-style: `print(nums)` → `[3, 1, 2]`, dicts/structs/tuples/nested all print; strings quote inside containers. `"{x}"` interpolation always on (`{{` escapes); containers interpolate via a string-builder family.
@@ -82,6 +82,8 @@ cargo test --release
 - const_eval ListLit: returns `Some(Tx)` with the element type resolved directly (was falling into the scalar-only `ty` derivation and returning None); mixed-elem literals still reject. Field defaults like `tags = ["a","b"]` now work.
 - stdlib_modules_typecheck (tests/conformance.rs): for each of the ~46 stdlib modules writes `<use mods.strc>` + compile, expects 0 diagnostics. First run exposed latent type errors in gui/net/physics/web/serialize/dsl/units/fixed/undo/ipc/debug/procgen/analytics — all fixed at source (incl. physics.strc impulse var `j` → `imp`; web/serialize/dsl use `{{}}` escapes for literal braces in interpolation).
 - Verified this session: cargo test 8 green (4 conformance + 4 unit, incl. the stdlib typecheck); all 5 showcase examples run clean (voxel_sandbox, platformer_2d, bullet_hell, raytracer, physics_sandbox); `still build --release` produces working exes via gcc (native) and tcc (native Linux + Windows tcc.exe under Wine); smoke tests for bitwise/static-methods/list-defaults/replace all pass.
+- Step slices `xs[a:b:c]` (second push): parser reworks the LB postfix into one ladder (`[i] | [a:b] | [a:b:c] | [:b] | [::c] | [a::c] | [:]`, helper parse_slice_step, Index arm clones sp — Span is non-Copy); AST Expr::Slice/X::Slice gain a step slot. Checker wants 3 ints. Emit splits hard: no step → the old still_list_TAG_slice/still_str_slice 2-bound path UNCHANGED (keeps fast codegen); step → `still_list_TAG_slice3/still_str_slice3` with STILL_SLICE_NONE `INT64_MIN` sentinels for omitted bounds. rt implements Python normalization (neg step: start default len-1, end default -1, explicit `<0` get +=len, start clamped, end floored at -1; pos step: 0/len defaults + clamps). GOTCHA hit: str arm first emitted "0"/"->len" defaults for the STEPPED path → `s[::-1]` became slice3(s, 0, 6, -1) = empty; omitted bounds on a stepped slice must be sentinels (step=2 str was fine and list via the split branch was fine — only the merged str arm regressed). slice3 exists for str/list_i/list_s AND inside STILL_DEFINE_LIST (hand instances + macro share shape).
+- `args()` builtin: Bi::Args → `still_args()` list<str>; generated main() now calls `still_args_init(argc, argv)` in its prologue (replacing `(void)argc; (void)argv;`). Includes argv[0] — sys.argv parity. conformance/valid/slices_args.strc pins ALL of: 1:6, ::2, ::-1, 5:1:-1, -2::-1, 1:6:3, -100:, :100, 4:2 (empty), str ::-1/::3/-1:-3:-1/5::-2, plus args() presence checks.
 
 ## Memory model (do not change silently)
 
@@ -120,7 +122,7 @@ cargo test --release
 
 ## Known limitations (v0.2, honest list)
 
-- No closures, nested functions, classes/inheritance, exceptions, match, step slices, chained comparisons, heterogeneous containers (need `any`), `global` keyword (assigning a global name inside a function shadows with a local — Python rule), argc/argv, threads, borrow checking. All are worklog-future items, not promises.
+- No closures, nested functions, classes/inheritance, exceptions, match, chained comparisons, heterogeneous containers (need `any`), `global` keyword (assigning a global name inside a function shadows with a local — Python rule), threads, borrow checking. All are worklog-future items, not promises.
 - Dict iteration order is hash order (deterministic per build, not insertion).
 - `print`/`str()` of a `str?` prints the string or `none` (nested containers still quote strings).
 - Aug-assign on a ref-typed list element (`xs[i] += s`) retains an extra ref (leak, not a crash).
@@ -146,7 +148,7 @@ cargo test --release
 3. Borrow-free mutation story for structs in lists (`xs[i].x = v` works; `xs[i] = xs[i]` copies).
 4. Closure capture-by-value; then stdlib sort/map/filter/each over closures.
 5. LSP server binary (`still lsp` on JSON-RPC stdio) so Neovim/others get what VSCode has.
-6. `global` keyword; argc/argv; step slices; match-on-int with exhaustiveness.
+6. `global` keyword; match-on-int with exhaustiveness.
 7. Bench suite in CI (SoA particle update vs C reference, fail >10% regression).
 8. CPython bridge: `use py` with py.init/py.run/py.call over the C ABI hub.
 9. Crash-only debugging → real stepping (needs DWARF work in the C backend).
