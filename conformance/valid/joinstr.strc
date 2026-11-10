@@ -1,0 +1,8 @@
+words = ["a", "big", "river"]
+print(" ".join(words))
+print("".join(["s", "t"]))
+print("-".join([]))
+if "ab".join(["z"]) == "z":
+    print("join single ok")
+if " ".join([""]) == "":
+    print("join blank ok")

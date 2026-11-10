@@ -827,6 +827,19 @@ still_str* still_str_replace(still_str* s, still_str* from, still_str* to) {
     return out;
 }
 
+still_str* still_str_join(still_str* sep, still_list_s* parts) {
+    still_sb* sb = still_sb_new();
+    for (int64_t i = 0; i < parts->len; i++) {
+        if (i > 0 && sep->len > 0) still_sb_s(sb, sep);
+        still_str* p = parts->data[i];
+        if (p->len > 0) still_sb_s(sb, p);
+    }
+    still_str* out = still_str_new(sb->buf, sb->len);
+    free(sb->buf);
+    free(sb);
+    return out;
+}
+
 bool still_ptr_eq(void* a, void* b) {
     return a == b;
 }

@@ -1979,6 +1979,18 @@ impl Checker {
                     }
                     m(X::Method(Box::new(recv), "split".into(), args), Ty::List(Rc::new(Ty::Str)))
                 }
+                "join" => {
+                    let ok = match resolve(&args[0].ty) {
+                        Ty::Never => true,
+                        Ty::List(e) => matches!(*e, Ty::Str),
+                        _ => false,
+                    };
+                    if args.len() != 1 || !ok {
+                        self.diags.push(err(sp, "join takes one list of str to combine".into()));
+                        return None;
+                    }
+                    m(X::Method(Box::new(recv), "join".into(), args), Ty::Str)
+                }
                 "replace" => {
                     if args.len() != 2 || !matches!(resolve(&args[0].ty), Ty::Str | Ty::Never) || !matches!(resolve(&args[1].ty), Ty::Str | Ty::Never) {
                         self.diags.push(err(sp, "replace takes two str arguments (from, to)".into()));
@@ -1987,7 +1999,7 @@ impl Checker {
                     m(X::Method(Box::new(recv), "replace".into(), args), Ty::Str)
                 }
                 other => {
-                    self.diags.push(err(sp, format!("strings have no method '{}' (they have len, upper, lower, trim, contains, starts, ends, split, replace)", other)));
+                    self.diags.push(err(sp, format!("strings have no method '{}' (they have len, upper, lower, trim, contains, starts, ends, split, join, replace)", other)));
                     None
                 }
             },

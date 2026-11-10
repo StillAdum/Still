@@ -421,6 +421,8 @@ static bool still_dict_##KTAG##_##VTAG##_eq(still_dict_##KTAG##_##VTAG* a, still
 
 #endif
 still_list_s* still_str_split(still_str* s, still_str* sep);
+still_str* still_str_replace(still_str* s, still_str* from, still_str* to);
+still_str* still_str_join(still_str* sep, still_list_s* parts);
 bool still_ptr_eq(void* a, void* b);
 
 typedef struct {

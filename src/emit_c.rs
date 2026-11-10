@@ -2517,6 +2517,13 @@ impl Emitter {
                     self.reg_temp(&t, Ty::Str);
                     t
                 }
+                "join" => {
+                    let a = self.emit_expr(&args[0]);
+                    let t = self.newtmp();
+                    self.line(format!("still_str* {} = still_str_join({}, {});", t, re, a));
+                    self.reg_temp(&t, Ty::Str);
+                    t
+                }
                 _ => "0".into(),
             },
             Ty::Dict(k, v) => {

@@ -7,7 +7,7 @@ func read_lines(path: str) -> [str]:
     return lines
 
 func write_lines(path: str, lines: [str]):
-    out = ""
-    for ln in lines:
-        out = out + ln + "\n"
+    out = "\n".join(lines)
+    if len(lines) > 0:
+        out = out + "\n"
     write_file(path, out)
