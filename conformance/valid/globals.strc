@@ -1,0 +1,20 @@
+counter = 0
+who = "still"
+
+func bump(n):
+    global counter
+    counter += n
+    return counter
+
+func reset():
+    global counter, who
+    counter = 0
+    who = "reset"
+
+bump(3)
+bump(4)
+print(bump(1))
+print(counter)
+reset()
+print(counter)
+print(who)

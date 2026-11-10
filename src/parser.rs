@@ -718,6 +718,29 @@ impl Parser {
                 self.end_stmt()?;
                 Some(Stmt::Pass(sp))
             }
+            Tok::Kw(crate::lexer::Kw::Global) => {
+                self.bump();
+                let mut names = Vec::new();
+                loop {
+                    match self.cur().tok.clone() {
+                        Tok::Ident(n) => {
+                            names.push(n);
+                            self.bump();
+                        }
+                        _ => {
+                            self.error(&self.cur().span, "expected a name after 'global'".into());
+                            return None;
+                        }
+                    }
+                    if matches!(self.cur().tok, Tok::P(crate::lexer::P::Comma)) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+                self.end_stmt()?;
+                Some(Stmt::Global(names, sp))
+            }
             Tok::Kw(crate::lexer::Kw::Break) => {
                 self.bump();
                 self.end_stmt()?;

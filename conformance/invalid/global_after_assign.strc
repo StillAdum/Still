@@ -1,0 +1,4 @@
+counter = 0
+func f():
+    counter = 1
+    global counter

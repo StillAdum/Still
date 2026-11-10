@@ -174,6 +174,7 @@ pub enum Stmt {
         value: Option<Expr>,
         span: Span,
     },
+    Global(Vec<String>, Span),
     Break(Span),
     Continue(Span),
     Pass(Span),

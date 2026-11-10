@@ -28,6 +28,7 @@ struct Ctx {
     loops: usize,
     in_fn: bool,
     depth: u32,
+    global_names: HashSet<String>,
 }
 
 impl Ctx {
@@ -44,6 +45,7 @@ impl Ctx {
             loops: 0,
             in_fn,
             depth: 0,
+            global_names: HashSet::new(),
         }
     }
 
@@ -2408,6 +2410,21 @@ impl Checker {
     fn check_stmt(&mut self, ctx: &mut Ctx, s: &Stmt, out: &mut Vec<CS>) -> Option<()> {
         match s {
             Stmt::Pass(_) => out.push(CS::Pass),
+            Stmt::Global(names, sp) => {
+                if !ctx.in_fn {
+                    return Some(()); // module-level `global` is a no-op (Python rule)
+                }
+                for name in names {
+                    if ctx.lookup(name).is_some() {
+                        self.diags.push(err(sp, format!("'{}' is assigned to before its 'global' declaration", name)));
+                    }
+                    if !self.gmap.contains_key(&(ctx.module.clone(), name.clone())) {
+                        self.diags.push(err(sp, format!("global '{}' must exist at module level; assign it at the top level first", name)));
+                    }
+                    ctx.global_names.insert(name.clone());
+                }
+                Some(())
+            }
             Stmt::Break(sp) => {
                 if ctx.loops == 0 {
                     self.diags.push(err(sp, "break can only be used inside a loop".into()));
@@ -2760,7 +2777,7 @@ impl Checker {
                     return Some(());
                 }
                 if let Some(cname) = self.gmap.get(&(module.clone(), name.clone())).cloned() {
-                    if ctx.in_fn {
+                    if ctx.in_fn && !ctx.global_names.contains(&name) {
                         let id = ctx.declare(name, vt.ty.clone());
                         out.push(CS::Decl { local: id, name: name.clone(), ty: vt.ty.clone(), value: Some(vt) });
                         return Some(());

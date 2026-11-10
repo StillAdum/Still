@@ -31,6 +31,7 @@ pub enum Kw {
     None,
     Pass,
     As,
+    Global,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +121,7 @@ fn keyword(s: &str) -> Option<Kw> {
         "none" => Kw::None,
         "pass" => Kw::Pass,
         "as" => Kw::As,
+        "global" => Kw::Global,
         _ => return None,
     })
 }
