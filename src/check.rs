@@ -511,7 +511,7 @@ impl Checker {
                     }
                     Ty::List(Rc::new(first))
                 };
-                X::ListLit(xs)
+                return Some(Tx { ty, span: sp, x: X::ListLit(xs) });
             }
             Expr::Binary(op, l, r, _) => {
                 let lt = self.const_eval(l)?;
@@ -1963,8 +1963,15 @@ impl Checker {
                     }
                     m(X::Method(Box::new(recv), "split".into(), args), Ty::List(Rc::new(Ty::Str)))
                 }
+                "replace" => {
+                    if args.len() != 2 || !matches!(resolve(&args[0].ty), Ty::Str | Ty::Never) || !matches!(resolve(&args[1].ty), Ty::Str | Ty::Never) {
+                        self.diags.push(err(sp, "replace takes two str arguments (from, to)".into()));
+                        return None;
+                    }
+                    m(X::Method(Box::new(recv), "replace".into(), args), Ty::Str)
+                }
                 other => {
-                    self.diags.push(err(sp, format!("strings have no method '{}' (they have len, upper, lower, trim, contains, starts, ends, split)", other)));
+                    self.diags.push(err(sp, format!("strings have no method '{}' (they have len, upper, lower, trim, contains, starts, ends, split, replace)", other)));
                     None
                 }
             },

@@ -713,6 +713,27 @@ still_list_s* still_str_split(still_str* s, still_str* sep) {
     return r;
 }
 
+still_str* still_str_replace(still_str* s, still_str* from, still_str* to) {
+    if (from->len == 0 || s->len == 0) {
+        return (still_str*)still_retain(s);
+    }
+    still_sb* sb = still_sb_new();
+    int64_t i = 0;
+    while (i < s->len) {
+        if (i + from->len <= s->len && memcmp(s->bytes + i, from->bytes, (size_t)from->len) == 0) {
+            still_sb_s(sb, to);
+            i += from->len;
+        } else {
+            still_sb_c(sb, s->bytes[i]);
+            i++;
+        }
+    }
+    still_str* out = still_str_new(sb->buf, sb->len);
+    free(sb->buf);
+    free(sb);
+    return out;
+}
+
 bool still_ptr_eq(void* a, void* b) {
     return a == b;
 }

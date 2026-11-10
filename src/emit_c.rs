@@ -2487,6 +2487,14 @@ impl Emitter {
                     self.reg_temp(&t, Ty::List(Rc::new(Ty::Str)));
                     t
                 }
+                "replace" => {
+                    let a = self.emit_expr(&args[0]);
+                    let b = self.emit_expr(&args[1]);
+                    let t = self.newtmp();
+                    self.line(format!("still_str* {} = still_str_replace({}, {}, {});", t, re, a, b));
+                    self.reg_temp(&t, Ty::Str);
+                    t
+                }
                 _ => "0".into(),
             },
             Ty::Dict(k, v) => {
