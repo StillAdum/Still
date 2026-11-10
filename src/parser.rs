@@ -1164,7 +1164,7 @@ impl Parser {
                         }
                     }
                     if sliced {
-                        let end = if matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon | Tok::P(crate::lexer::P::RB))) {
+                        let end = if matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon) | Tok::P(crate::lexer::P::RB)) {
                             None
                         } else {
                             Some(Box::new(self.parse_ternary()?))
