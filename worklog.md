@@ -84,6 +84,7 @@ cargo test --release
 - Verified this session: cargo test 8 green (4 conformance + 4 unit, incl. the stdlib typecheck); all 5 showcase examples run clean (voxel_sandbox, platformer_2d, bullet_hell, raytracer, physics_sandbox); `still build --release` produces working exes via gcc (native) and tcc (native Linux + Windows tcc.exe under Wine); smoke tests for bitwise/static-methods/list-defaults/replace all pass.
 - Step slices `xs[a:b:c]` (second push): parser reworks the LB postfix into one ladder (`[i] | [a:b] | [a:b:c] | [:b] | [::c] | [a::c] | [:]`, helper parse_slice_step, Index arm clones sp — Span is non-Copy); AST Expr::Slice/X::Slice gain a step slot. Checker wants 3 ints. Emit splits hard: no step → the old still_list_TAG_slice/still_str_slice 2-bound path UNCHANGED (keeps fast codegen); step → `still_list_TAG_slice3/still_str_slice3` with STILL_SLICE_NONE `INT64_MIN` sentinels for omitted bounds. rt implements Python normalization (neg step: start default len-1, end default -1, explicit `<0` get +=len, start clamped, end floored at -1; pos step: 0/len defaults + clamps). GOTCHA hit: str arm first emitted "0"/"->len" defaults for the STEPPED path → `s[::-1]` became slice3(s, 0, 6, -1) = empty; omitted bounds on a stepped slice must be sentinels (step=2 str was fine and list via the split branch was fine — only the merged str arm regressed). slice3 exists for str/list_i/list_s AND inside STILL_DEFINE_LIST (hand instances + macro share shape).
 - `args()` builtin: Bi::Args → `still_args()` list<str>; generated main() now calls `still_args_init(argc, argv)` in its prologue (replacing `(void)argc; (void)argv;`). Includes argv[0] — sys.argv parity. conformance/valid/slices_args.strc pins ALL of: 1:6, ::2, ::-1, 5:1:-1, -2::-1, 1:6:3, -100:, :100, 4:2 (empty), str ::-1/::3/-1:-3:-1/5::-2, plus args() presence checks.
+- `global` keyword: Kw::Global (lexer) → Stmt::Global(Vec<String>) → checker: module-level = no-op; inside fn marks ctx.global_names; each name must exist in gmap and must not be bound locally already. Assign-gmap branch got `!ctx.global_names.contains(name)` so declared names flow into Place::Global writes (real C static updates, rt-verified); check_target's old blanket rejection gets the same exception — covers `x += v` aug and multi-target unpack. conformance: valid/globals.strc (aug + multi-name + fresh local reads interleaved) and invalid/global_after_assign.strc (misordered decl).
 
 ## Memory model (do not change silently)
 
@@ -122,7 +123,8 @@ cargo test --release
 
 ## Known limitations (v0.2, honest list)
 
-- No closures, nested functions, classes/inheritance, exceptions, match, chained comparisons, heterogeneous containers (need `any`), `global` keyword (assigning a global name inside a function shadows with a local — Python rule), threads, borrow checking. All are worklog-future items, not promises.
+- No closures, nested functions, classes/inheritance, exceptions, match, chained comparisons, heterogeneous containers (need `any`), threads, borrow checking. All are worklog-future items, not promises.
+- `global` keyword EXISTS (v0.2.1): inside a function, a name matching a module-level global is still shadowed by a fresh local UNLESS the fn declares `global x` (comma list ok) first. `global x` requires x to exist at module level (Still does not create globals from fns), errors on `x = ...` before the declaration, and relaxes the old blanket rejection at check_target (aug-assign/multi-target paths work too). Reads of foreign/global names inside fns are unaffected; generic instantiations start with a fresh global_names set.
 - Dict iteration order is hash order (deterministic per build, not insertion).
 - `print`/`str()` of a `str?` prints the string or `none` (nested containers still quote strings).
 - Aug-assign on a ref-typed list element (`xs[i] += s`) retains an extra ref (leak, not a crash).
@@ -148,7 +150,7 @@ cargo test --release
 3. Borrow-free mutation story for structs in lists (`xs[i].x = v` works; `xs[i] = xs[i]` copies).
 4. Closure capture-by-value; then stdlib sort/map/filter/each over closures.
 5. LSP server binary (`still lsp` on JSON-RPC stdio) so Neovim/others get what VSCode has.
-6. `global` keyword; match-on-int with exhaustiveness.
+6. match-on-int with exhaustiveness; `str.join(list)` for O(n) list→str joins (fixes quadratic write-lines loops).
 7. Bench suite in CI (SoA particle update vs C reference, fail >10% regression).
 8. CPython bridge: `use py` with py.init/py.run/py.call over the C ABI hub.
 9. Crash-only debugging → real stepping (needs DWARF work in the C backend).
