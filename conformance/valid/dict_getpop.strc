@@ -1,0 +1,13 @@
+prices = {"apple": 3, "kiwi": 5}
+print(prices.get("kiwi", 0))
+print(prices.get("pear", 0))
+print(prices.get("apple", 99))
+v = prices.pop("apple")
+print(v)
+print(len(prices))
+names = {"a": "alpha", "b": "beta"}
+print(names.get("b", "?"))
+print(names.get("c", "?"))
+w = names.pop("a")
+print(w + " is gone")
+print(names)

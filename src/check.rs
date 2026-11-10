@@ -1999,11 +1999,41 @@ impl Checker {
                     None
                 }
             },
-            Ty::Dict(..) => match name {
+            Ty::Dict(k, v) => match name {
                 "len" => m(X::Method(Box::new(recv), "len".into(), args), Ty::Int),
                 "clear" => m(X::Method(Box::new(recv), "clear".into(), args), Ty::NoneTy),
+                "get" => {
+                    if args.len() != 2 {
+                        self.diags.push(err(sp, format!("get takes (key, default), got {}", args.len())));
+                        return None;
+                    }
+                    let kt = (**k).clone();
+                    let vt = (**v).clone();
+                    if assign_ok(&args[0].ty, &kt).is_none() && !coerce_holes(&args[0].ty, &kt) {
+                        self.diags.push(err(sp, format!("dict key must be {}", ty_name(&kt))));
+                        return None;
+                    }
+                    if assign_ok(&args[1].ty, &vt).is_none() && !coerce_holes(&args[1].ty, &vt) {
+                        self.diags.push(err(sp, format!("the default value must be {}", ty_name(&vt))));
+                        return None;
+                    }
+                    m(X::Method(Box::new(recv), "get".into(), args), vt)
+                }
+                "pop" => {
+                    if args.len() != 1 {
+                        self.diags.push(err(sp, format!("pop takes (key), got {}", args.len())));
+                        return None;
+                    }
+                    let kt = (**k).clone();
+                    let vt = (**v).clone();
+                    if assign_ok(&args[0].ty, &kt).is_none() && !coerce_holes(&args[0].ty, &kt) {
+                        self.diags.push(err(sp, format!("dict key must be {}", ty_name(&kt))));
+                        return None;
+                    }
+                    m(X::Method(Box::new(recv), "pop".into(), args), vt)
+                }
                 other => {
-                    self.diags.push(err(sp, format!("dicts have no method '{}' (they have len, clear; try keys(d) and 'in')", other)));
+                    self.diags.push(err(sp, format!("dicts have no method '{}' (they have len, clear, get, pop; try keys(d) and 'in')", other)));
                     None
                 }
             },

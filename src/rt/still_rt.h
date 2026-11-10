@@ -398,6 +398,18 @@ static CV still_dict_##KTAG##_##VTAG##_get(still_dict_##KTAG##_##VTAG* d, CK _k,
 static bool still_dict_##KTAG##_##VTAG##_has(still_dict_##KTAG##_##VTAG* d, CK _k) { \
     return still_dict_##KTAG##_##VTAG##_find(d, _k) >= 0; \
 } \
+static CV still_dict_##KTAG##_##VTAG##_pop(still_dict_##KTAG##_##VTAG* d, CK _k, const char* file, int64_t line) { \
+    int64_t _i = still_dict_##KTAG##_##VTAG##_find(d, _k); \
+    if (_i < 0) still_panic(file, line, "missing key in dict"); \
+    CV _v = d->slots[_i].val; \
+    d->slots[_i].state = 2; \
+    d->len--; \
+    d->used--; \
+    _k = d->slots[_i].key; \
+    (void)_k; \
+    RELEASEK; \
+    return _v; \
+} \
 static void still_dict_##KTAG##_##VTAG##_clear(still_dict_##KTAG##_##VTAG* d) { \
     for (int64_t _i = 0; _i < d->cap; _i++) { \
         if (d->slots[_i].state == 1) { CK _k = d->slots[_i].key; (void)_k; CV _v = d->slots[_i].val; (void)_v; RELEASEK; RELEASEV; } \

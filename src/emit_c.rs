@@ -2532,6 +2532,35 @@ impl Emitter {
                 match name {
                     "len" => format!("{}->len", re),
                     "clear" => format!("still_dict_{}_{}_clear({})", ktag, vtag, re),
+                    "get" => {
+                        // d.get(key, default): value ownership moves in; key is borrowed
+                        // (the statement-temp release of the key matches plain dict reads).
+                        let vty = resolve_deep(v);
+                        let kt = self.emit_expr(&args[0]);
+                        let dv = self.emit_expr(&args[1]);
+                        let t = self.newtmp();
+                        let ct = self.ctype(&vty);
+                        self.set_line(&sp);
+                        self.line(format!("{} {};", ct, t));
+                        self.line(format!("if (still_dict_{}_{}_has({}, {})) {{", ktag, vtag, re, kt));
+                        self.line(format!("{} = still_dict_{}_{}_get({}, {}, __FILE__, __LINE__);", t, ktag, vtag, re, kt));
+                        self.line("} else {");
+                        self.unreg_temp(&dv);
+                        self.line(format!("{} = {};", t, dv));
+                        self.line("}");
+                        self.reg_temp(&t, vty);
+                        t
+                    }
+                    "pop" => {
+                        let vty = resolve_deep(v);
+                        let kt = self.emit_expr(&args[0]);
+                        let t = self.newtmp();
+                        let ct = self.ctype(&vty);
+                        self.set_line(&sp);
+                        self.line(format!("{} {} = still_dict_{}_{}_pop({}, {}, __FILE__, __LINE__);", ct, t, ktag, vtag, re, kt));
+                        self.reg_temp(&t, vty);
+                        t
+                    }
                     _ => "0".into(),
                 }
             }
