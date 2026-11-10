@@ -2544,10 +2544,10 @@ impl Emitter {
                         self.line(format!("{} {};", ct, t));
                         self.line(format!("if (still_dict_{}_{}_has({}, {})) {{", ktag, vtag, re, kt));
                         self.line(format!("{} = still_dict_{}_{}_get({}, {}, __FILE__, __LINE__);", t, ktag, vtag, re, kt));
-                        self.line("} else {");
+                        self.line("} else {".into());
                         self.unreg_temp(&dv);
                         self.line(format!("{} = {};", t, dv));
-                        self.line("}");
+                        self.line("}".into());
                         self.reg_temp(&t, vty);
                         t
                     }
