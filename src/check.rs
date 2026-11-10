@@ -1404,21 +1404,31 @@ impl Checker {
                 if let Expr::Ident(base, bsp) = obj.as_ref() {
                     let module = ctx.module.clone();
                     if ctx.lookup(base).is_none() {
-                        // Static method on a type itself: Length.from_km(5.0)
-                        if let Some(qual) = self.short_types.get(&module).and_then(|s| s.get(base)).cloned() {
-                            let mkey = format!("{}.{}", qual.split("::").nth(1).unwrap_or(base), mname);
-                            if self.funcs.contains_key(&(module.clone(), mkey.clone())) {
+                        // Static method on a type itself: Length.from_km(5.0).
+                        // The type may be local or come from a `use`d module.
+                        let mut qual: Option<(String, String)> = None;
+                        if let Some(q) = self.short_types.get(&module).and_then(|s| s.get(base)).cloned() {
+                            qual = Some((module.clone(), q));
+                        } else if let Some(als) = self.aliases.get(&module).cloned() {
+                            for tgt in als.values() {
+                                if let Some(q) = self.short_types.get(tgt).and_then(|s| s.get(base)).cloned() {
+                                    qual = Some((tgt.clone(), q));
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some((tmod, q)) = qual {
+                            let tname = q.split("::").nth(1).unwrap_or(base).to_string();
+                            let mkey = format!("{}.{}", tname, mname);
+                            if self.funcs.contains_key(&(tmod.clone(), mkey.clone())) {
                                 let mut ax = Vec::new();
                                 for a in args {
                                     ax.push(self.infer(ctx, a)?);
                                 }
-                                return self.call_fn(ctx, &module, &mkey, ax, sp);
+                                return self.call_fn(ctx, &tmod, &mkey, ax, sp);
                             }
-                            let istatic = self.prog.structs.get(&qual).map(|s| s.statics.iter().any(|m| m.ends_with(&format!(".{}", mname)))).unwrap_or(false);
-                            if !istatic {
-                                self.diags.push(err(msp, format!("type '{}' has no static method '{}'; check the spelling or pass an instance first", base, mname)));
-                                return None;
-                            }
+                            self.diags.push(err(msp, format!("type '{}' has no static method '{}' (static methods are callable on the type name directly)", base, mname)));
+                            return None;
                         }
                         if let Some(target) = self.aliases.get(&module).and_then(|m| m.get(base)).cloned() {
                             let mut ax = Vec::new();
