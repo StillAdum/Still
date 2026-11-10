@@ -1980,12 +1980,8 @@ impl Checker {
                     m(X::Method(Box::new(recv), "split".into(), args), Ty::List(Rc::new(Ty::Str)))
                 }
                 "join" => {
-                    let ok = match resolve(&args[0].ty) {
-                        Ty::Never => true,
-                        Ty::List(e) => matches!(*e, Ty::Str),
-                        _ => false,
-                    };
-                    if args.len() != 1 || !ok {
+                    let want: Ty = Ty::List(Rc::new(Ty::Str));
+                    if args.len() != 1 || (assign_ok(&args[0].ty, &want).is_none() && !coerce_holes(&args[0].ty, &want)) {
                         self.diags.push(err(sp, "join takes one list of str to combine".into()));
                         return None;
                     }
