@@ -194,7 +194,7 @@ impl Emitter {
         let ret_c = if name == "main" { "int".to_string() } else { ret_c };
         self.body.push_str(&format!("{}{} {}({}) {{\n", vis, ret_c, name, pl));
         if name == "main" {
-            self.body.push_str("    (void)argc;\n    (void)argv;\n__MODULE_INITS__\n");
+            self.body.push_str("    still_args_init(argc, argv);\n__MODULE_INITS__\n");
         }
         let n_params = params.len();
         self.emit_block(body);
@@ -2150,24 +2150,45 @@ impl Emitter {
                     _ => format!("{}[{}]", oe, ie),
                 }
             }
-            X::Slice(obj, a, b) => {
+            X::Slice(obj, a, b, s) => {
                 let oe = self.as_var(obj);
                 let oty = resolve_deep(&obj.ty);
-                let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "0".into());
-                let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| format!("{}->len", oe));
-                match &oty {
-                    Ty::List(e) => {
+                match (&oty, s) {
+                    (Ty::List(e), None) => {
                         let tag = ty_tag(&resolve_deep(e));
+                        let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "0".into());
+                        let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| format!("{}->len", oe));
                         let t = self.newtmp();
                         self.set_line(&sp);
                         self.line(format!("still_list_{}* {} = still_list_{}_slice({}, {}, {});", tag, t, tag, oe, av, bv));
                         self.reg_temp(&t, oty.clone());
                         t
                     }
-                    _ => {
+                    (Ty::List(e), Some(step)) => {
+                        let tag = ty_tag(&resolve_deep(e));
+                        let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "STILL_SLICE_NONE".into());
+                        let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "STILL_SLICE_NONE".into());
+                        let sv = self.emit_expr(step);
                         let t = self.newtmp();
                         self.set_line(&sp);
-                        self.line(format!("still_str* {} = still_str_slice({}, {}, {});", t, oe, av, bv));
+                        self.line(format!("still_list_{}* {} = still_list_{}_slice3({}, {}, {}, {});", tag, t, tag, oe, av, bv, sv));
+                        self.reg_temp(&t, oty.clone());
+                        t
+                    }
+                    _ => {
+                        let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "0".into());
+                        let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| format!("{}->len", oe));
+                        let t = self.newtmp();
+                        self.set_line(&sp);
+                        match s {
+                            None => {
+                                self.line(format!("still_str* {} = still_str_slice({}, {}, {});", t, oe, av, bv));
+                            }
+                            Some(step) => {
+                                let sv = self.emit_expr(step);
+                                self.line(format!("still_str* {} = still_str_slice3({}, {}, {}, {});", t, oe, av, bv, sv));
+                            }
+                        }
                         self.reg_temp(&t, Ty::Str);
                         t
                     }
@@ -3022,6 +3043,7 @@ impl Emitter {
                 t
             }
             Bi::Clock => "still_clock()".into(),
+            Bi::Args => "still_args()".into(),
             Bi::Rand => "still_rand()".into(),
             Bi::RandBound => {
                 let e = self.emit_expr(&args[0]);

@@ -9,6 +9,10 @@
 #include <unistd.h>
 #endif
 
+/* captured by still_args_init from the generated main() */
+static int64_t g_still_argc = 0;
+static char** g_still_argv = 0;
+
 void still_panic(const char* file, int64_t line, const char* msg) {
     fflush(stdout);
     fprintf(stderr, "%s:%lld: panic: %s\n", file, (long long)line, msg);
@@ -147,6 +151,34 @@ still_str* still_str_slice(still_str* a, int64_t start, int64_t end) {
     if (end > a->len) end = a->len;
     if (end < start) end = start;
     return still_str_new(a->bytes + start, end - start);
+}
+
+/* Python slice semantics with explicit step; STILL_SLICE_NONE = omitted bound */
+still_str* still_str_slice3(still_str* a, int64_t start, int64_t end, int64_t step) {
+    int64_t len = a->len;
+    if (step > 0) {
+        if (start == STILL_SLICE_NONE) start = 0; else if (start < 0) start += len;
+        if (end == STILL_SLICE_NONE) end = len; else if (end < 0) end += len;
+        if (start < 0) start = 0;
+        if (start > len) start = len;
+        if (end > len) end = len;
+        still_sb* sb = still_sb_new();
+        for (int64_t i = start; i < end; i += step) still_sb_c(sb, a->bytes[i]);
+        still_str* out = still_str_new(sb->buf, sb->len);
+        free(sb->buf);
+        free(sb);
+        return out;
+    }
+    if (start == STILL_SLICE_NONE) start = len - 1; else if (start < 0) start += len;
+    if (end == STILL_SLICE_NONE) end = -1; else if (end < 0) end += len;
+    if (start >= len) start = len - 1;
+    if (end < -1) end = -1;
+    still_sb* sb = still_sb_new();
+    for (int64_t i = start; i > end; i += step) still_sb_c(sb, a->bytes[i]);
+    still_str* out = still_str_new(sb->buf, sb->len);
+    free(sb->buf);
+    free(sb);
+    return out;
 }
 
 still_str* still_str_index(still_str* a, int64_t i, const char* file, int64_t line) {
@@ -424,6 +456,29 @@ still_list_i* still_list_i_slice(still_list_i* l, int64_t a, int64_t b) {
     return r;
 }
 
+still_list_i* still_list_i_slice3(still_list_i* l, int64_t start, int64_t end, int64_t step) {
+    int64_t len = l->len;
+    if (step > 0) {
+        if (start == STILL_SLICE_NONE) start = 0; else if (start < 0) start += len;
+        if (end == STILL_SLICE_NONE) end = len; else if (end < 0) end += len;
+        if (start < 0) start = 0;
+        if (start > len) start = len;
+        if (end > len) end = len;
+    } else {
+        if (start == STILL_SLICE_NONE) start = len - 1; else if (start < 0) start += len;
+        if (end == STILL_SLICE_NONE) end = -1; else if (end < 0) end += len;
+        if (start >= len) start = len - 1;
+        if (end < -1) end = -1;
+    }
+    still_list_i* r = still_list_i_alloc(8);
+    if (step > 0) {
+        for (int64_t i = start; i < end; i += step) still_list_i_push(r, l->data[i]);
+    } else {
+        for (int64_t i = start; i > end; i += step) still_list_i_push(r, l->data[i]);
+    }
+    return r;
+}
+
 still_list_s* still_list_s_slice(still_list_s* l, int64_t a, int64_t b) {
     if (a < 0) a += l->len;
     if (b < 0) b += l->len;
@@ -432,6 +487,44 @@ still_list_s* still_list_s_slice(still_list_s* l, int64_t a, int64_t b) {
     if (b < a) b = a;
     still_list_s* r = still_list_s_alloc(b - a);
     for (int64_t i = a; i < b; i++) still_list_s_push(r, (still_str*)still_retain(l->data[i]));
+    return r;
+}
+
+still_list_s* still_list_s_slice3(still_list_s* l, int64_t start, int64_t end, int64_t step) {
+    int64_t len = l->len;
+    if (step > 0) {
+        if (start == STILL_SLICE_NONE) start = 0; else if (start < 0) start += len;
+        if (end == STILL_SLICE_NONE) end = len; else if (end < 0) end += len;
+        if (start < 0) start = 0;
+        if (start > len) start = len;
+        if (end > len) end = len;
+    } else {
+        if (start == STILL_SLICE_NONE) start = len - 1; else if (start < 0) start += len;
+        if (end == STILL_SLICE_NONE) end = -1; else if (end < 0) end += len;
+        if (start >= len) start = len - 1;
+        if (end < -1) end = -1;
+    }
+    still_list_s* r = still_list_s_alloc(8);
+    if (step > 0) {
+        for (int64_t i = start; i < end; i += step) still_list_s_push(r, (still_str*)still_retain(l->data[i]));
+    } else {
+        for (int64_t i = start; i > end; i += step) still_list_s_push(r, (still_str*)still_retain(l->data[i]));
+    }
+    return r;
+}
+
+void still_args_init(int argc, char** argv) {
+    g_still_argc = (int64_t)argc;
+    g_still_argv = argv;
+}
+
+still_list_s* still_args(void) {
+    still_list_s* r = still_list_s_alloc(g_still_argc > 0 ? g_still_argc : 0);
+    for (int64_t i = 0; i < g_still_argc; i++) {
+        if (g_still_argv[i]) {
+            still_list_s_push(r, still_str_new(g_still_argv[i], (int64_t)strlen(g_still_argv[i])));
+        }
+    }
     return r;
 }
 

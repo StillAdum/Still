@@ -1,0 +1,21 @@
+xs = [0, 1, 2, 3, 4, 5, 6, 7]
+print(xs[1:6])
+print(xs[::2])
+print(xs[::-1])
+print(xs[5:1:-1])
+print(xs[-2::-1])
+print(xs[1:6:3])
+print(xs[-100:])
+print(xs[:100])
+print(xs[4:2])
+s = "abcdef"
+print(s[::-1])
+print(s[::3])
+print(s[-1:-3:-1])
+print(s[5::-2])
+a = args()
+if a.len() < 1:
+    fail("args() must include argv[0]")
+if a[0].len() == 0:
+    fail("argv[0] empty")
+print("args ok")

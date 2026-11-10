@@ -848,6 +848,19 @@ impl Parser {
         self.parse_ternary()
     }
 
+    /// After the slice-end part: if a ':' follows, parse the step (`a:b:c`).
+    /// `[:]`/`[a::c]`/`[a:b:]` all yield None when the step slot is empty.
+    fn parse_slice_step(&mut self) -> Option<Option<Box<Expr>>> {
+        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
+            return Some(None);
+        }
+        self.bump();
+        if matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
+            return Some(None);
+        }
+        Some(Some(Box::new(self.parse_ternary()?)))
+    }
+
     fn parse_ternary(&mut self) -> Option<Expr> {
         let val = self.parse_or()?;
         if matches!(self.cur().tok, Tok::Kw(crate::lexer::Kw::If)) {
@@ -1129,34 +1142,18 @@ impl Parser {
                 Tok::P(crate::lexer::P::LB) => {
                     let sp = e.span();
                     self.bump();
+                    // slice/index ladder: [i] | [a:b] | [a:b:c] | [:b] | [::c] | [a::c] | [:]
+                    let mut start = None::<Box<Expr>>;
+                    let mut sliced = false;
                     if matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
                         self.bump();
-                        let end = if matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
-                            None
-                        } else {
-                            Some(Box::new(self.parse_ternary()?))
-                        };
-                        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
-                            self.error(&self.cur().span, "expected ']'".into());
-                            return None;
-                        }
-                        self.bump();
-                        e = Expr::Slice(Box::new(e), None, end, sp);
+                        sliced = true;
                     } else {
                         let idx = self.parse_ternary()?;
                         if matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
+                            start = Some(Box::new(idx));
                             self.bump();
-                            let end = if matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
-                                None
-                            } else {
-                                Some(Box::new(self.parse_ternary()?))
-                            };
-                            if !matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
-                                self.error(&self.cur().span, "expected ']'".into());
-                                return None;
-                            }
-                            self.bump();
-                            e = Expr::Slice(Box::new(e), Some(Box::new(idx)), end, sp);
+                            sliced = true;
                         } else {
                             if !matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
                                 self.error(&self.cur().span, "expected ']'".into());
@@ -1165,6 +1162,20 @@ impl Parser {
                             self.bump();
                             e = Expr::Index(Box::new(e), Box::new(idx), sp);
                         }
+                    }
+                    if sliced {
+                        let end = if matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon | Tok::P(crate::lexer::P::RB))) {
+                            None
+                        } else {
+                            Some(Box::new(self.parse_ternary()?))
+                        };
+                        let step = self.parse_slice_step()?;
+                        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::RB)) {
+                            self.error(&self.cur().span, "expected ']'".into());
+                            return None;
+                        }
+                        self.bump();
+                        e = Expr::Slice(Box::new(e), start, end, step, sp);
                     }
                 }
                 Tok::P(crate::lexer::P::Dot) => {

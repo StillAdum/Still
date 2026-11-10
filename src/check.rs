@@ -11,7 +11,7 @@ pub struct ModSrc {
 pub const BUILTINS: &[&str] = &[
     "print", "len", "push", "pop", "keys", "pairs", "str", "int", "float", "bool", "abs", "min", "max", "sum",
     "range", "enumerate", "reversed", "type_of", "input", "clock", "rand", "seed", "check", "fail", "exit",
-    "ord", "chr", "read_file", "write_file", "get_env", "sleep_ms",
+    "ord", "chr", "read_file", "write_file", "get_env", "sleep_ms", "args",
 ];
 
 type FKey = (String, String);
@@ -831,7 +831,7 @@ impl Checker {
             }
             Expr::Call(callee, args, _) => self.infer_call(ctx, callee, args, &sp),
             Expr::Index(obj, idx, _) => self.infer_index(ctx, obj, idx, &sp, e),
-            Expr::Slice(obj, a, b, _) => {
+            Expr::Slice(obj, a, b, c, _) => {
                 let ot = self.infer(ctx, obj)?;
                 let at = match a {
                     Some(x) => Some(self.want_int(ctx, x, "slice start")?),
@@ -841,9 +841,13 @@ impl Checker {
                     Some(x) => Some(self.want_int(ctx, x, "slice end")?),
                     None => None,
                 };
+                let ct = match c {
+                    Some(x) => Some(self.want_int(ctx, x, "slice step")?),
+                    None => None,
+                };
                 match resolve(&ot.ty) {
-                    Ty::List(elem) => Some(Tx { ty: Ty::List(elem), span: sp, x: X::Slice(Box::new(ot), at.map(Box::new), bt.map(Box::new)) }),
-                    Ty::Str => Some(Tx { ty: Ty::Str, span: sp, x: X::Slice(Box::new(ot), at.map(Box::new), bt.map(Box::new)) }),
+                    Ty::List(elem) => Some(Tx { ty: Ty::List(elem), span: sp, x: X::Slice(Box::new(ot), at.map(Box::new), bt.map(Box::new), ct.map(Box::new)) }),
+                    Ty::Str => Some(Tx { ty: Ty::Str, span: sp, x: X::Slice(Box::new(ot), at.map(Box::new), bt.map(Box::new), ct.map(Box::new)) }),
                     other => {
                         self.diags.push(err(&sp, format!("cannot slice {} (works on str and list)", ty_name(&other))));
                         None
@@ -1894,6 +1898,10 @@ impl Checker {
             "get_env" => {
                 need!(1, "get_env");
                 BR::Yes(Some(Tx { ty: Ty::Nullable(Box::new(Ty::Str)), span: sp.clone(), x: X::Builtin(Bi::GetEnv, args) }))
+            }
+            "args" => {
+                need!(0, "args");
+                BR::Yes(Some(Tx { ty: Ty::List(Rc::new(Ty::Str)), span: sp.clone(), x: X::Builtin(Bi::Args, args) }))
             }
             "sleep_ms" => {
                 need!(1, "sleep_ms");

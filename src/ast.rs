@@ -116,7 +116,7 @@ pub enum Expr {
     Cond(Box<Expr>, Box<Expr>, Box<Expr>, Span),
     Call(Box<Expr>, Vec<Expr>, Span),
     Index(Box<Expr>, Box<Expr>, Span),
-    Slice(Box<Expr>, Option<Box<Expr>>, Option<Box<Expr>>, Span),
+    Slice(Box<Expr>, Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>, Span),
     Member(Box<Expr>, String, Span),
 }
 
@@ -203,7 +203,7 @@ impl Expr {
             | Expr::Cond(_, _, _, s)
             | Expr::Call(_, _, s)
             | Expr::Index(_, _, s)
-            | Expr::Slice(_, _, _, s)
+            | Expr::Slice(_, _, _, _, s)
             | Expr::Member(_, _, s) => s.clone(),
         }
     }
@@ -319,7 +319,7 @@ pub enum X {
     Builtin(Bi, Vec<Tx>),
     Method(Box<Tx>, String, Vec<Tx>),
     Index(Box<Tx>, Box<Tx>),
-    Slice(Box<Tx>, Option<Box<Tx>>, Option<Box<Tx>>),
+    Slice(Box<Tx>, Option<Box<Tx>>, Option<Box<Tx>>, Option<Box<Tx>>),
     Field(Box<Tx>, String),
     Unwrap(Box<Tx>),
     AsStr(Box<Tx>),
@@ -364,6 +364,7 @@ pub enum Bi {
     WriteFile,
     GetEnv,
     SleepMs,
+    Args,
 }
 
 #[derive(Clone, Debug)]

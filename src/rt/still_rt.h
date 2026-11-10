@@ -95,6 +95,7 @@ bool still_str_contains(still_str* a, still_str* b);
 bool still_str_starts(still_str* a, still_str* b);
 bool still_str_ends(still_str* a, still_str* b);
 still_str* still_str_slice(still_str* a, int64_t start, int64_t end);
+still_str* still_str_slice3(still_str* a, int64_t start, int64_t end, int64_t step);
 still_str* still_str_index(still_str* a, int64_t i, const char* file, int64_t line);
 still_str* still_str_from_int(int64_t v);
 still_str* still_str_from_float(double v);
@@ -115,6 +116,7 @@ still_list_i* still_list_i_concat(still_list_i* a, still_list_i* b);
 bool still_list_i_eq(still_list_i* a, still_list_i* b);
 bool still_list_i_contains(still_list_i* l, int64_t v);
 still_list_i* still_list_i_slice(still_list_i* l, int64_t a, int64_t b);
+still_list_i* still_list_i_slice3(still_list_i* l, int64_t a, int64_t b, int64_t step);
 still_list_i* still_list_i_reversed(still_list_i* l);
 void still_list_i_clear(still_list_i* l);
 int64_t still_list_i_pop(still_list_i* l, const char* file, int64_t line);
@@ -127,6 +129,13 @@ still_list_s* still_list_s_concat(still_list_s* a, still_list_s* b);
 bool still_list_s_eq(still_list_s* a, still_list_s* b);
 bool still_list_s_contains(still_list_s* l, still_str* v);
 still_list_s* still_list_s_slice(still_list_s* l, int64_t a, int64_t b);
+still_list_s* still_list_s_slice3(still_list_s* l, int64_t a, int64_t b, int64_t step);
+
+/* omitted slice bounds use this sentinel (Python-style defaults resolved here) */
+#define STILL_SLICE_NONE ((int64_t)0x8000000000000000LL)
+
+void still_args_init(int argc, char** argv);
+still_list_s* still_args(void);
 still_list_s* still_list_s_reversed(still_list_s* l);
 void still_list_s_clear(still_list_s* l);
 still_str* still_list_s_pop(still_list_s* l, const char* file, int64_t line);
@@ -280,6 +289,28 @@ static still_list_##TAG* still_list_##TAG##_slice(still_list_##TAG* l, int64_t a
     if (b < a) b = a; \
     still_list_##TAG* r = still_list_##TAG##_alloc(b - a); \
     for (int64_t _i = a; _i < b; _i++) { T _v = l->data[_i]; (void)_v; still_list_##TAG##_push(r, RETAIN); } \
+    return r; \
+} \
+static still_list_##TAG* still_list_##TAG##_slice3(still_list_##TAG* l, int64_t start, int64_t end, int64_t step) { \
+    int64_t _ln = l->len; \
+    if (step > 0) { \
+        if (start == STILL_SLICE_NONE) start = 0; else if (start < 0) start += _ln; \
+        if (end == STILL_SLICE_NONE) end = _ln; else if (end < 0) end += _ln; \
+        if (start < 0) start = 0; \
+        if (start > _ln) start = _ln; \
+        if (end > _ln) end = _ln; \
+    } else { \
+        if (start == STILL_SLICE_NONE) start = _ln - 1; else if (start < 0) start += _ln; \
+        if (end == STILL_SLICE_NONE) end = -1; else if (end < 0) end += _ln; \
+        if (start >= _ln) start = _ln - 1; \
+        if (end < -1) end = -1; \
+    } \
+    still_list_##TAG* r = still_list_##TAG##_alloc(8); \
+    if (step > 0) { \
+        for (int64_t _i = start; _i < end; _i += step) { T _v = l->data[_i]; (void)_v; still_list_##TAG##_push(r, RETAIN); } \
+    } else { \
+        for (int64_t _i = start; _i > end; _i += step) { T _v = l->data[_i]; (void)_v; still_list_##TAG##_push(r, RETAIN); } \
+    } \
     return r; \
 } \
 static still_list_##TAG* still_list_##TAG##_reversed(still_list_##TAG* l) { \
