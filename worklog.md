@@ -1,6 +1,6 @@
 # Still — Worklog
 
-State: **v0.2.0 — new Python/Lua-style syntax, full rewrite, all tests green; released as v0.2.0 with Windows installer + VSIX (GitHub Actions builds it on windows-latest).** Read this before touching anything. Token-dense on purpose.
+State: **v0.2.0 — new Python/Lua-style syntax, full rewrite, all tests green; released as v0.2.0 with Windows installer + VSIX (GitHub Actions builds it on windows-latest). Post-release power-up: bitwise ops, static type methods, str.replace, empty-literal unification, all 46 stdlib modules typecheck-clean, portable tcc ships via setup-cc.** Read this before touching anything. Token-dense on purpose.
 
 ## What Still is (v0.2)
 
@@ -52,21 +52,36 @@ cargo test --release
 
 - Indentation blocks with `:`; one-line bodies (`if x: return 1`); `pass`; `;` separates statements.
 - No declarations: `x = 5` infers. Annotation optional: `x: int = 5`, `nums: [int] = []`. Reassignment type-checked (`x = none` later widened via the `T?` placeholder rule).
-- Types: `int`(i64) `float`(f64) `bool` `str` `[T]` `{K: V}` (int/str keys only) `(A, B)` tuples, `T?` nullable, named structs. Never mixed lists (`[1, "a"]` is an error; `[1, 2.5]` widens to float).
-- `/` always float; `//` floor div (Python sign rules); `%` Python sign; `**` pow (int**nonneg-literal stays int); int/float mix widens; `and or not in is`; chained comparisons rejected with a hint; `a if c else b` ternary.
+- Types: `int`(i64) `float`(f64) `bool` `str` `[T]` `{K: V}` (int/str keys only) `(A, B)` tuples, `T?` nullable, named structs. Never mixed lists (`[1, "a"]` is an error; `[1, 2.5]` widens to float). Bare `[]`/`{}` literals unify with the destination type through checker hole binding (`VoxelChunk(1, 2, 3, [])` fills the elem type from the parameter) — empty literals are legal anywhere a typed value is expected.
+- `/` always float; `//` floor div (Python sign rules); `%` Python sign; `**` pow (int**nonneg-literal stays int); int/float mix widens; `and or not in is`; chained comparisons rejected with a hint; `a if c else b` ternary. Bitwise: `| ^ & << >> ~` with Python precedence (cmp → `|` → `^` → `&` → shifts → additive); works on bool too; no chained shifts; `0b`/`0x` literals fine.
 - Truthiness Python-style: none/false/0/0.0/""/[] falsy.
 - `none` + `T?`: `x = none` makes a placeholder that widens to `T?` on first real value. Flow-unwrap: inside `if x:` / `if x is not none:` reads of `x` are unwrapped to `T` (checker rewrites reads to X::Unwrap).
 - Functions: `func f(a, b):` — unannotated params = implicit generics, monomorphized per call-site types (instantiation cache keyed by resolved arg types). Defaults `b = "x"` must be const (type inferred from the default). `-> T` optional. Self-recursion with unknown return type works via the same-Var-cell→Int heuristic in arith; mutual recursion via compare/arith constraints. Uncalled generics are not checked (documented).
-- Methods: `type P:` fields (with defaults) + `func m(self, ...)`. Call `p.m(...)`. Structs are VALUES (copy on assign; lists/dicts/strs/SoA are shared refs). Struct cycles through values rejected.
+- Methods: `type P:` fields (with defaults) + `func m(self, ...)`. Call `p.m(...)`. Structs are VALUES (copy on assign; lists/dicts/strs/SoA are shared refs). Struct cycles through values rejected. Static type methods: a `func` with NO `self` inside a `type` block is callable on the type name itself — `Length.from_km(5.0)` — and resolves bare through a `use`d module too.
 - `@soa type Part:` → `Part(cap)` refcounted parallel-arrays collection: `parts.push(x, y, ...)`, `parts.x[i]` read/write, `len(parts)`, `parts.clear()`, `for i in parts` (indexes). Fields must be int/float/bool/str.
-- Builtins: print len push pop keys pairs str int float bool abs min max sum range enumerate reversed type_of input clock rand seed check fail exit ord chr read_file write_file get_env sleep_ms. Methods: list .push/.pop/.len/.clear; str .len/.upper/.lower/.trim/.contains/.starts/.ends/.split; dict .len/.clear; soa .push/.clear/.len.
+- Builtins: print len push pop keys pairs str int float bool abs min max sum range enumerate reversed type_of input clock rand seed check fail exit ord chr read_file write_file get_env sleep_ms. Methods: list .push/.pop/.len/.clear; str .len/.upper/.lower/.trim/.contains/.starts/.ends/.split/.replace; dict .len/.clear; soa .push/.clear/.len.
 - `for x in list|str|dict(keys)|range|soa`, `for i, x in enumerate(list)`, `for k, v in pairs(dict)` (also any list of 2-tuples). Loop var assignment is an error.
 - Multi-assign/swap `a, b = b, a` (emits temp tuple unless all targets fresh), multi-return `return a, b`, tuple index `t.0`.
 - `print` is Python-style: `print(nums)` → `[3, 1, 2]`, dicts/structs/tuples/nested all print; strings quote inside containers. `"{x}"` interpolation always on (`{{` escapes); containers interpolate via a string-builder family.
 - Modules: `use math` (alias access `math.sqrt`), `use math: sqrt, pi` (imports names), `use "./path.strc"` or a local `mylib.strc`. Embedded stdlib: math (libm externs + gcd/lcm/clamp/lerp/sign), sort (generic quicksort + sorted), random (seeded, rand_range/shuffle/choice), time, io (read_lines/write_lines), os (env/run_cmd). Module top-level statements run once at start, in dependency order; `use` cycles are errors.
 - extern "C": `func puts(s: str) -> int` incl. variadic `...` (str passes NUL-terminated bytes; variadic int passes int64 — use `%ld`). Only int/float/bool/str params; returns int/float/bool.
 - `@export func name(...)` → non-static C symbol with the plain source name (non-generic only).
-- Panics (always on): index bounds, missing dict key, div/mod by zero, pop empty. Debug-only: integer overflow checks (builtin `__builtin_*_overflow`), breakpoint traps (env `STILL_BREAKPOINTS="file:line,..."` → SIGTRAP at line, used by the VSCode debugger). Release: wrapping arithmetic, `-O2 -flto`.
+- Panics (always on): index bounds, missing dict key, div/mod by zero, pop empty. Debug-only: integer overflow checks (builtins, or the `_MSC_VER || __TINYC__` emulation shim in still_rt.h — tcc has no __builtin_*_overflow), breakpoint traps (env `STILL_BREAKPOINTS="file:line,..."` → SIGTRAP at line, used by the VSCode debugger). Release: wrapping arithmetic, `-O2 -flto`.
+
+## Compilers (do not assume MSVC/gcc only)
+
+- Supported: gcc, clang, MSVC cl, TinyCC. Dev box uses gcc; CI uses MSVC; portability target is tcc.
+- TinyCC ships portable (~2 MB total): release v0.2.0 carries `tcc-win64.zip` (781 KB, Wine-verified) + `tcc-linux-x86_64.tar.gz` (504 KB; extracts with tcc in `~/.still/bin`, libtcc1 in `~/.still/lib/tcc` so it self-locates). `still setup-cc` installs one automatically: apt/OS package first, release-tarball fallback, then Windows URLs (WinLibs/MSYS2) with a nested-zip rescue; it checks with a trivial compile probe. `still build` prefers whatever's proven working (cc probe cache) — end users do NOT need VS Build Tools anymore.
+
+## Post-release session log (language bits + stdlib + tcc, all compile work in the Linux Codespace)
+
+- Bitwise ops end-to-end: lexer tokens P::{LSL,RSr,Band,Bor,Bxor,Tilde}; parser ladder `parse_bitor/bitxor/bitand/bitshift` wedged between parse_comparison and parse_add, `~` in parse_unary; AST BinOp::{Shl,Shr,Band,Bor,Bxor} + UnOp::BNot; checker typing (shifts: int<<int; `~` on int only; bool operands allowed for & | ^); emit_c direct C ops. `~5 = -6`, `-16>>2 = -4`, bool `t | f` typed bool.
+- Static methods: `StructInfo.statics` tracks no-self funcs as `"T.name";` call path is Type.name → mkey `"T.name"` when the base name is a type, not a variable. Second commit (04b880b) added the use-imported path: resolution consults short_types of the same module FIRST, then aliases of every `use`d target — nine `units/*.strc` types (`Length.from_km` etc.) all callable bare.
+- `str.replace(from, to)`: checker branch (2 str args → str), emit → `still_str_replace`, rt impl scans with memcmp, rebuilds via still_sb (splits the `sb` free correctly; empty `from` returns the original retained).
+- Empty-literal holes: `coerce_holes`/`bind_hole` — a `[]`/`{}` literal whose elem/key type is still an unbound Var gets bound to the coercion target instead of erroring. This is what makes `Part(0, 0, 0, [])`-style calls typecheck.
+- const_eval ListLit: returns `Some(Tx)` with the element type resolved directly (was falling into the scalar-only `ty` derivation and returning None); mixed-elem literals still reject. Field defaults like `tags = ["a","b"]` now work.
+- stdlib_modules_typecheck (tests/conformance.rs): for each of the ~46 stdlib modules writes `<use mods.strc>` + compile, expects 0 diagnostics. First run exposed latent type errors in gui/net/physics/web/serialize/dsl/units/fixed/undo/ipc/debug/procgen/analytics — all fixed at source (incl. physics.strc impulse var `j` → `imp`; web/serialize/dsl use `{{}}` escapes for literal braces in interpolation).
+- Verified this session: cargo test 8 green (4 conformance + 4 unit, incl. the stdlib typecheck); all 5 showcase examples run clean (voxel_sandbox, platformer_2d, bullet_hell, raytracer, physics_sandbox); `still build --release` produces working exes via gcc (native) and tcc (native Linux + Windows tcc.exe under Wine); smoke tests for bitwise/static-methods/list-defaults/replace all pass.
 
 ## Memory model (do not change silently)
 
@@ -109,7 +124,7 @@ cargo test --release
 - Dict iteration order is hash order (deterministic per build, not insertion).
 - `print`/`str()` of a `str?` prints the string or `none` (nested containers still quote strings).
 - Aug-assign on a ref-typed list element (`xs[i] += s`) retains an extra ref (leak, not a crash).
-- Windows: fully supported since v0.2.0 release — CI runs full conformance on MSVC; release zip built on windows-latest. Debug overflow checks use an _MSC_VER shim in still_rt.h (MSVC has no __builtin_*_overflow).
+- Windows: fully supported since v0.2.0 release — CI runs full conformance on MSVC; release zip built on windows-latest. Debug overflow checks use the `_MSC_VER || __TINYC__` shim in still_rt.h (MSVC and tcc both lack __builtin_*_overflow). Windows users without VS Build Tools: `still setup-cc` pulls portable tcc.
 - CPython bridge from v0.1 was dropped in the redesign (the `extern "C"` hub is the path back; see roadmap Phase 6).
 
 ## Windows release notes (v0.2.0, how it ships)
@@ -135,3 +150,4 @@ cargo test --release
 7. Bench suite in CI (SoA particle update vs C reference, fail >10% regression).
 8. CPython bridge: `use py` with py.init/py.run/py.call over the C ABI hub.
 9. Crash-only debugging → real stepping (needs DWARF work in the C backend).
+10. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces).
