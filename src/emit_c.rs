@@ -2176,16 +2176,18 @@ impl Emitter {
                         t
                     }
                     _ => {
-                        let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "0".into());
-                        let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| format!("{}->len", oe));
                         let t = self.newtmp();
                         self.set_line(&sp);
                         match s {
                             None => {
+                                let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "0".into());
+                                let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| format!("{}->len", oe));
                                 self.line(format!("still_str* {} = still_str_slice({}, {}, {});", t, oe, av, bv));
                             }
                             Some(step) => {
                                 let sv = self.emit_expr(step);
+                                let av = a.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "STILL_SLICE_NONE".into());
+                                let bv = b.as_ref().map(|x| self.emit_expr(x)).unwrap_or_else(|| "STILL_SLICE_NONE".into());
                                 self.line(format!("still_str* {} = still_str_slice3({}, {}, {}, {});", t, oe, av, bv, sv));
                             }
                         }
