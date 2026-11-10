@@ -2969,8 +2969,8 @@ impl Checker {
                 }
                 let module = ctx.module.clone();
                 if let Some(cname) = self.gmap.get(&(module.clone(), name.to_string())).cloned() {
-                    if ctx.in_fn {
-                        self.diags.push(err(nsp, format!("cannot assign to the global '{}' from inside a function", name)));
+                    if ctx.in_fn && !ctx.global_names.contains(name) {
+                        self.diags.push(err(nsp, format!("cannot assign to the global '{}' from inside a function (write 'global {}' first)", name, name)));
                         return None;
                     }
                     return Some((Place::Global(cname.clone()), self.prog.globals[&cname].ty.clone()));
