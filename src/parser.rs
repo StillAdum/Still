@@ -49,6 +49,10 @@ impl Parser {
         self.toks[self.pos.min(self.toks.len() - 1)].clone()
     }
 
+    fn peek(&self) -> Token {
+        self.toks[(self.pos + 1).min(self.toks.len() - 1)].clone()
+    }
+
     fn at_eof(&self) -> bool {
         matches!(self.cur().tok, Tok::Eof)
     }
@@ -172,6 +176,11 @@ impl Parser {
             Tok::Kw(crate::lexer::Kw::If) => self.parse_if(sp).map(|s| s.0),
             Tok::Kw(crate::lexer::Kw::While) => self.parse_while(sp),
             Tok::Kw(crate::lexer::Kw::For) => self.parse_for(sp),
+            // `match` is a soft keyword: only a match statement when followed by a
+            // subject variable, so identifiers named `match` keep working.
+            Tok::Ident(ref n) if n == "match" && matches!(self.peek().tok, Tok::Ident(_)) => {
+                self.parse_match(sp)
+            }
             _ => self.parse_simple_stmt(),
         }
     }
@@ -630,6 +639,130 @@ impl Parser {
             let s = self.parse_simple_stmt()?;
             Some(vec![s])
         }
+    }
+
+    /// `match` is a soft keyword: it only starts a match statement when the next
+    /// token is the subject variable (an identifier). Any other follow token
+    /// (`=`, `.`, `[`, `(`, newline, ...) falls through to normal expression
+    /// parsing, so variables named `match` keep working.
+    fn parse_match(&mut self, sp: Span) -> Option<Stmt> {
+        self.bump(); // 'match'
+        let t = self.bump();
+        let subject = match t.tok {
+            Tok::Ident(n) => Expr::Ident(n, t.span.clone()),
+            other => {
+                self.error(&t.span, format!("match subject must be a variable, found {}", tok_str(&other)));
+                return None;
+            }
+        };
+        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
+            self.error(&self.cur().span, "expected ':' after match subject".into());
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Newline) {
+            self.error(&self.cur().span, "expected an indented block of 'case' arms".into());
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Indent) {
+            self.error(&self.cur().span, "expected an indented block of 'case' arms".into());
+            return None;
+        }
+        self.bump();
+        let mut arms = Vec::new();
+        self.depth += 1;
+        loop {
+            match self.cur().tok.clone() {
+                Tok::Dedent => {
+                    self.bump();
+                    break;
+                }
+                Tok::Eof => break,
+                Tok::Newline => {
+                    self.bump();
+                }
+                Tok::Ident(ref n) if n == "case" && self.case_ahead() => match self.parse_case() {
+                    Some(a) => arms.push(a),
+                    None => self.sync_stmt(),
+                },
+                other => {
+                    self.error(&self.cur().span, format!("expected 'case' inside match body, found {}", tok_str(&other)));
+                    return None;
+                }
+            }
+        }
+        self.depth -= 1;
+        if arms.is_empty() {
+            self.error(&sp, "match needs at least one 'case' arm".into());
+            return None;
+        }
+        Some(Stmt::Match { subject, arms, span: sp })
+    }
+
+    /// A `case` token only starts an arm when the next token can begin a
+    /// pattern, so variables named `case` still work inside match bodies.
+    fn case_ahead(&self) -> bool {
+        match &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok {
+            Tok::Int(_) | Tok::Str(_) | Tok::P(crate::lexer::P::Minus) => true,
+            Tok::Ident(n) => n == "_",
+            _ => false,
+        }
+    }
+
+    fn parse_case(&mut self) -> Option<MatchCase> {
+        let sp = self.cur().span.clone();
+        self.bump(); // 'case'
+        let mut values: Vec<Expr> = Vec::new();
+        let mut wildcard = false;
+        loop {
+            let t = self.bump();
+            match t.tok {
+                Tok::Ident(ref n) if n == "_" => {
+                    wildcard = true;
+                }
+                Tok::Int(v) => {
+                    values.push(Expr::IntLit(v, t.span.clone()));
+                }
+                Tok::Str(parts) => match parts.as_slice() {
+                    [StrPart::Lit(s)] => values.push(Expr::StrLit(s.clone(), t.span.clone())),
+                    _ => {
+                        self.error(&t.span, "case patterns must be plain string literals".into());
+                        return None;
+                    }
+                },
+                Tok::P(crate::lexer::P::Minus) => {
+                    let t2 = self.bump();
+                    match t2.tok {
+                        Tok::Int(v) => values.push(Expr::IntLit(v.wrapping_neg(), t2.span.clone())),
+                        other => {
+                            self.error(&t2.span, format!("expected an integer after '-', found {}", tok_str(&other)));
+                            return None;
+                        }
+                    }
+                }
+                other => {
+                    self.error(&t.span, format!("expected a literal or '_' in case pattern, found {}", tok_str(&other)));
+                    return None;
+                }
+            }
+            if matches!(self.cur().tok, Tok::P(crate::lexer::P::Comma)) {
+                if wildcard {
+                    self.error(&self.cur().span, "'_' cannot be combined with other patterns".into());
+                    return None;
+                }
+                self.bump();
+                continue;
+            }
+            break;
+        }
+        let body = self.parse_block()?;
+        Some(MatchCase {
+            values,
+            wildcard,
+            body,
+            span: sp,
+        })
     }
 
     fn parse_if(&mut self, sp: Span) -> Option<(Stmt, Span)> {

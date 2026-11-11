@@ -1,0 +1,4 @@
+b = true
+match b:
+    case 1:
+        print("a")

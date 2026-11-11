@@ -2496,6 +2496,9 @@ impl Checker {
                 let cs = self.check_if(ctx, arms, else_body)?;
                 out.push(cs);
             }
+            Stmt::Match { subject, arms, span } => {
+                self.check_match(ctx, subject, arms, span, out)?;
+            }
             Stmt::While { cond, body, .. } => {
                 let ct = self.infer(ctx, cond)?;
                 ctx.scopes.push(HashMap::new());
@@ -2560,6 +2563,76 @@ impl Checker {
             cur = vec![CS::If { cond: ct, then: body, els: cur }];
         }
         cur.pop()
+    }
+
+    /// Validate a match statement and lower it to an equivalent if/elif chain
+    /// whose conditions are `subject in [values]`, reusing check_if and the
+    /// existing X::In emit path. A `_` arm becomes the else branch; with no
+    /// `_` arm, non-matching subjects fall through (Python rule).
+    fn check_match(
+        &mut self,
+        ctx: &mut Ctx,
+        subject: &Expr,
+        arms: &[MatchCase],
+        span: &Span,
+        out: &mut Vec<CS>,
+    ) -> Option<()> {
+        // Restrict the subject to a plain variable: each lowered `in` condition
+        // re-evaluates the subject, and a call subject would run once per arm.
+        if !matches!(subject, Expr::Ident(_, _)) {
+            self.diags.push(err(span, "match subject must be a plain variable".into()));
+            return None;
+        }
+        let sty = self.infer(ctx, subject)?;
+        let subj_is_int = matches!(resolve(&sty.ty), Ty::Int);
+        if !matches!(resolve(&sty.ty), Ty::Int | Ty::Str) {
+            self.diags.push(err(span, format!("match subject must be int or str, not {}", ty_name(&sty.ty))));
+            return None;
+        }
+        let mut if_arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
+        let mut else_body: Option<Vec<Stmt>> = None;
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut wildcard_seen = false;
+        for arm in arms {
+            if wildcard_seen {
+                self.diags.push(err(&arm.span, "'_' must be the last case arm".into()));
+                return None;
+            }
+            if arm.wildcard {
+                wildcard_seen = true;
+                else_body = Some(arm.body.clone());
+                continue;
+            }
+            let mut pats: Vec<Expr> = Vec::new();
+            for v in &arm.values {
+                let (key, is_int_pat, vsp) = match v {
+                    Expr::IntLit(n, vsp) => (format!("i:{}", n), true, vsp),
+                    Expr::StrLit(s, vsp) => (format!("s:{}", s), false, vsp),
+                    _ => {
+                        self.diags.push(err(&v.span(), "case patterns must be int or str literals".into()));
+                        return None;
+                    }
+                };
+                if is_int_pat != subj_is_int {
+                    self.diags.push(err(vsp, if subj_is_int {
+                        "str case value cannot match an int subject".into()
+                    } else {
+                        "int case value cannot match a str subject".into()
+                    }));
+                    return None;
+                }
+                if !seen.insert(key) {
+                    self.diags.push(err(vsp, "duplicate case value".into()));
+                    return None;
+                }
+                pats.push(v.clone());
+            }
+            let list = Expr::ListLit(pats, arm.span.clone());
+            let cond = Expr::In(Box::new(subject.clone()), Box::new(list), false, arm.span.clone());
+            if_arms.push((cond, arm.body.clone()));
+        }
+        let lowered = Stmt::If { arms: if_arms, else_body, span: span.clone() };
+        self.check_stmt(ctx, &lowered, out)
     }
 
     fn check_for(&mut self, ctx: &mut Ctx, vars: &[String], iter: &Expr, body: &[Stmt], span: &crate::span::Span, out: &mut Vec<CS>) -> Option<()> {

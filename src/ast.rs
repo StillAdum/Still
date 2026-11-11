@@ -133,6 +133,14 @@ pub enum UnOp {
 }
 
 #[derive(Clone, Debug)]
+pub struct MatchCase {
+    pub values: Vec<Expr>,
+    pub wildcard: bool,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
 pub enum Stmt {
     FuncDef(FuncDef),
     TypeDef(TypeDef),
@@ -175,6 +183,11 @@ pub enum Stmt {
         span: Span,
     },
     Global(Vec<String>, Span),
+    Match {
+        subject: Expr,
+        arms: Vec<MatchCase>,
+        span: Span,
+    },
     Break(Span),
     Continue(Span),
     Pass(Span),

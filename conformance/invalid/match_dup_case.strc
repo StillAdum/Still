@@ -1,0 +1,6 @@
+x = 1
+match x:
+    case 1:
+        print("a")
+    case 1:
+        print("b")

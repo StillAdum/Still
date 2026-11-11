@@ -1,0 +1,4 @@
+s = "hi"
+match s:
+    case 1:
+        print("a")
