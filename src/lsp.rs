@@ -12,7 +12,7 @@
 
 use crate::span::{Diag, Span};
 use std::collections::HashMap;
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 
 // ---------------------------------------------------------------- tiny JSON
 

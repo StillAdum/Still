@@ -99,9 +99,9 @@ fn lsp_full_session() {
     assert!(syms.contains("greet"), "symbols: {}", syms);
     assert!(syms.contains("\"kind\":13"), "variable kind 13: {}", syms);
 
-    // Hover over the `greet` call: line index 2 = `print(greet(x))`, char 6 = 'g'.
+    // Hover over the `greet` call: line index 3 = `print(greet(x))`, char 6 = 'g'.
     s.send(
-        r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc"},"position":{"line":2,"character":6}}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc"},"position":{"line":3,"character":6}}}"#,
     );
     let hover = s.recv("hover response");
     assert!(hover.contains("greet"), "hover: {}", hover);
