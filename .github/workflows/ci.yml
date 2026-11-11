@@ -41,7 +41,7 @@ jobs:
           fi
           grep -q "index out of range" /tmp/oob.err
 
-      - name: Release-mode benchmark sanity (fib matches gcc -O2 within 3x)
+      - name: Release-mode benchmark sanity (fib within 3x of gcc -O2, best of 3)
         run: |
           set -e
           cat > /tmp/bench.strc << 'BENCH'
@@ -58,15 +58,25 @@ jobs:
           int main() { printf("%ld\n", fib(32)); return 0; }
           C
           gcc -O2 /tmp/bench.c -o /tmp/bench_c
-          T0=$(date +%s%N); /tmp/bench_still > /tmp/still_out; T1=$(date +%s%N)
-          T2=$(date +%s%N); /tmp/bench_c     > /tmp/c_out;     T3=$(date +%s%N)
-          STILL_MS=$(( (T1 - T0) / 1000000 ))
-          C_MS=$(( (T3 - T2) / 1000000 ))
-          echo "still=${STILL_MS}ms c=${C_MS}ms"
+          SBEST=99999999
+          for i in 1 2 3; do
+            T0=$(date +%s%N); /tmp/bench_still > /tmp/still_out; T1=$(date +%s%N)
+            MS=$(( (T1 - T0) / 1000000 ))
+            echo "still run$i: ${MS}ms"
+            if [ "$MS" -lt "$SBEST" ]; then SBEST=$MS; fi
+          done
+          CBEST=99999999
+          for i in 1 2 3; do
+            T0=$(date +%s%N); /tmp/bench_c > /tmp/c_out; T1=$(date +%s%N)
+            MS=$(( (T1 - T0) / 1000000 ))
+            echo "c run$i: ${MS}ms"
+            if [ "$MS" -lt "$CBEST" ]; then CBEST=$MS; fi
+          done
+          echo "still(min of 3)=${SBEST}ms c(min of 3)=${CBEST}ms"
           diff /tmp/still_out /tmp/c_out
-          LIMIT=$(( C_MS * 3 + 100 ))
-          if [ "$STILL_MS" -gt "$LIMIT" ]; then
-            echo "still is more than 3x slower than C (${STILL_MS}ms vs ${C_MS}ms)"
+          LIMIT=$(( CBEST * 3 + 100 ))
+          if [ "$SBEST" -gt "$LIMIT" ]; then
+            echo "still is more than 3x slower than C (${SBEST}ms vs ${CBEST}ms)"
             exit 1
           fi
 

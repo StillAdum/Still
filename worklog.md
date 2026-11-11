@@ -1,6 +1,6 @@
 # Still — Worklog
 
-State: **v0.2.0 — new Python/Lua-style syntax, full rewrite, all tests green; released as v0.2.0 with Windows installer + VSIX (GitHub Actions builds it on windows-latest). Post-release power-up: bitwise ops, static type methods, str.replace, empty-literal unification, all 46 stdlib modules typecheck-clean, portable tcc ships via setup-cc.** Read this before touching anything. Token-dense on purpose.
+State: **v0.3.0 — match statements, LSP binary (`still lsp`), CPython bridge (`use py`), extern str returns, bench gate best-of-3; released as v0.3.0. See ROADMAP-STATUS.md for the honest phase-by-phase mapping.** Read this before touching anything. Token-dense on purpose.
 
 ## What Still is (v0.2)
 
@@ -19,7 +19,8 @@ src/
   check.rs     names, inference, monomorphization, flow-none, builtins, modules, externs, diagnostics
   emit_c.rs    checked IR -> C11; refcount emission; type registry (list/dict/struct/tuple/opt/soa/eq/print/tostr helpers)
   cc.rs        find cc/gcc/clang then cl; Windows: vswhere -> vcvars64.bat wrap via generated still_build.bat; cl runs with current_dir=tmp (objs land there), /Fe absolute
-  lib.rs       driver: module loading ('use'), stdlib embedding, build/run/test/new, ide commands
+  lib.rs       driver: module loading ('use'), stdlib embedding, build/run/test/new, ide commands, check_text (in-memory LSP checking), file_symbols (shared symbol table)
+  lsp.rs       hand-rolled JSON + JSON-RPC 2.0 (Content-Length framing on stdio); still lsp serves diagnostics/symbols/hover/completion
   bin/still.rs CLI
   rt/          embedded C runtime (header + impl), compiled alongside generated code
   stdlib/      embedded Still modules: math, sort, random, time, io, os
@@ -45,6 +46,7 @@ target/release/still test conformance
 target/release/still new myproj
 target/release/still ide symbols file.strc   (JSON symbols for editors)
 target/release/still ide check file.strc     (JSON diagnostics)
+target/release/still lsp                     (JSON-RPC language server on stdio)
 cargo test --release
 ```
 
@@ -65,14 +67,14 @@ cargo test --release
 - `match` statement (literal int/str cases, Python-style soft keywords): `match x:` + `case 1, 2:` / `case "a":` / `case -5:` / `case _:` arms. `_` must be the last arm and acts as else; no `_` arm = fall-through. The checker validates (subject plain int/str variable; int/str literal patterns incl. unary-minus ints; no duplicate values; no `_` combined with other patterns) then LOWERS to an if/elif whose conditions are `subject in [literals]` — reuses check_if and the X::In list-contains emit entirely, no emitter changes. `match`/`case` are soft keywords: `match` only starts a statement when followed by an identifier (`match = 3` still assigns a variable named match), `case` only starts an arm inside a match body when followed by a literal or `_`.
 - `print` is Python-style: `print(nums)` → `[3, 1, 2]`, dicts/structs/tuples/nested all print; strings quote inside containers. `"{x}"` interpolation always on (`{{` escapes); containers interpolate via a string-builder family.
 - Modules: `use math` (alias access `math.sqrt`), `use math: sqrt, pi` (imports names), `use "./path.strc"` or a local `mylib.strc`. Embedded stdlib: math (libm externs + gcd/lcm/clamp/lerp/sign), sort (generic quicksort + sorted), random (seeded, rand_range/shuffle/choice), time, io (read_lines/write_lines), os (env/run_cmd). Module top-level statements run once at start, in dependency order; `use` cycles are errors.
-- extern "C": `func puts(s: str) -> int` incl. variadic `...` (str passes NUL-terminated bytes; variadic int passes int64 — use `%ld`). Only int/float/bool/str params; returns int/float/bool.
+- extern "C": `func puts(s: str) -> int` incl. variadic `...` (str passes NUL-terminated bytes; variadic int passes int64 — use `%ld`). Only int/float/bool/str params; returns int/float/bool/**str** (str ret = C fn returns borrowed `const char*`; call site copies once into a retained still_str via still_str_new + strlen — emitted in X::CallExtern before the ty_has_refs branch, ptr temp is NOT reg_temp'ed).
 - `@export func name(...)` → non-static C symbol with the plain source name (non-generic only).
 - Panics (always on): index bounds, missing dict key, div/mod by zero, pop empty. Debug-only: integer overflow checks (builtins, or the `_MSC_VER || __TINYC__` emulation shim in still_rt.h — tcc has no __builtin_*_overflow), breakpoint traps (env `STILL_BREAKPOINTS="file:line,..."` → SIGTRAP at line, used by the VSCode debugger). Release: wrapping arithmetic, `-O2 -flto`.
 
 ## Compilers (do not assume MSVC/gcc only)
 
 - Supported: gcc, clang, MSVC cl, TinyCC. Dev box uses gcc; CI uses MSVC; portability target is tcc.
-- TinyCC ships portable (~2 MB total): release v0.2.0 carries `tcc-win64.zip` (781 KB, Wine-verified) + `tcc-linux-x86_64.tar.gz` (504 KB; extracts with tcc in `~/.still/bin`, libtcc1 in `~/.still/lib/tcc` so it self-locates). `still setup-cc` installs one automatically: apt/OS package first, release-tarball fallback, then Windows URLs (WinLibs/MSYS2) with a nested-zip rescue; it checks with a trivial compile probe. `still build` prefers whatever's proven working (cc probe cache) — end users do NOT need VS Build Tools anymore.
+- TinyCC ships portable (~2 MB total): release v0.3.0 carries `tcc-win64.zip` (781 KB, Wine-verified) + `tcc-linux-x86_64.tar.gz` (504 KB; extracts with tcc in `~/.still/bin`, libtcc1 in `~/.still/lib/tcc` so it self-locates). `still setup-cc` installs one automatically: apt/OS package first, release-tarball fallback, then Windows URLs (WinLibs/MSYS2) with a nested-zip rescue; it checks with a trivial compile probe. `still build` prefers whatever's proven working (cc probe cache) — end users do NOT need VS Build Tools anymore.
 
 ## Post-release session log (language bits + stdlib + tcc, all compile work in the Linux Codespace)
 
@@ -147,15 +149,27 @@ cargo test --release
 - Doc gotcha learned: methods CANNOT mutate self (structs are values, self is a copy) — the idiom is `p = p.hurt(30)` returning a new struct; SETUP-WINDOWS.md sample is compiler-verified.
 - Deleted v0.1 leftovers: conformance/py (old-syntax pyinterop, did not compile), examples_dbg (old Rust scratch).
 
+## v0.3.0 session log (match shipped earlier; LSP + py bridge + release, all compile work in the Linux Codespace)
+
+- Match statements: shipped + verified first (50/50 conformance, gcc+tcc byte-identical), commit 80f41c7.
+- LSP server `src/lsp.rs` (~700 lines): tiny JSON value/parser/serializer (objects keep insertion order, surrogate-pair aware), Content-Length framing on stdio, server loop; methods: initialize (capabilities: full sync=1, documentSymbol/hover/completion providers), didOpen/didChange(full)/didClose → publishDiagnostics, documentSymbol (SymbolKind 12/5/6/8/13/2), hover (markdown `func name(params)` for known top-level symbols), completion (keywords + file symbols), shutdown/exit (exit 0 after shutdown else 1), -32601 for unknown requests. Ranges: spans are points → extended over the identifier so editors squiggle; 1-based char cols → 0-based UTF-16 (cols are char-based from the lexer's Vec<char>, so mapping is direct). Robustness: invalid JSON frames ignored, missing-`use` load errors become diagnostics, server keeps answering.
+- lib.rs refactor to support in-memory checking: `load_module` + `normalize_src` + `collect_uses` + `load_parsed` split out of `load_program` (behavior identical, main module label changed from "main" to the real file path — better diagnostics, conformance still green); new `pub check_text(src, main_path)` (resolves `use` relative to the real file dir so unsaved buffers see sibling modules, checks with debug=true); `Sym`/`file_symbols(src, label)` shared by ide_symbols (JSON format unchanged) and the LSP.
+- CLI: `still lsp` + usage line. tests/lsp.rs: full real-protocol session (init → didOpen w/ checker error → publish → documentSymbol → hover greet(who) → completion → didChange fix → empty diagnostics → -32601 → shutdown/exit 0) + garbage/missing-use robustness; unit tests for JSON roundtrip, lsp_range, uri_to_path. Gotcha: hover line indexes are 0-based — first test draft used a 1-based line and got `result:null`.
+- CPython bridge: rt-based dlopen/LoadLibrary of libpython at RUN TIME in still_rt.c (zero link deps, zero cc.rs changes). STILL_PYTHON_DLL env override. Windows candidates python314→39.dll then python3.dll (stable-ABI forwarder last); Linux libpython3.{14..8}.so.1.0 → .so → .dylib then libpython3.so. 14 symbols resolved via GetProcAddress/dlsym table (missing symbol = load failure). still_py_init: Py_InitializeEx(0) if !Py_IsInitialized, 0/-1; still_py_run: PyRun_SimpleString (+PyErr_Print if PyErr_Occurred — avoids double-print), 0/-1, traceback to stderr; still_py_eval: PyRun_String(expr, Py_eval_input=258, __main__ dict), on error PyErr_Fetch+Normalize → panic "python:0: panic: <Type>: <value>" (decrefs everything fetched; PyRun_String returns BORROWED ref — don't decref it; PyImport_ImportModule result IS new — decref after use); success path copies str(so) into a growing static buffer (borrowed pointer valid until next eval — call site copies immediately). Single-threaded (main thread holds GIL) — documented in py.strc.
+- extern `-> str` returns enabled for this (3-point change): check.rs validate_extern allows Str in ret (error text updated); extern_call + convert_externs ret matches add `Some(TypeAnnot::Str) => Ty::Str`; emit_c.rs X::CallExtern gains a Str branch BEFORE ty_has_refs: `const char* p = call; still_str* t = still_str_new(p, (int64_t)strlen(p)); reg_temp(t, Str)` — the ptr temp must NOT be reg_temp'ed (borrowed, not owned; releasing it as still_str* would corrupt the header). Prototypes for still_py_* live in still_rt.h (emit_c never emits extern prototypes; libc comes from system headers).
+- `src/stdlib/py.strc`: extern decls for still_py_init/run/eval + wrapper funcs init/run/eval (module-qualified as py.init etc.), doc comments with the run-then-eval idiom. Registered as STD_PY in lib.rs std_modules.
+- examples/py_bridge.strc (skips gracefully with exit 0 when libpython absent — CI-safe on MSVC runners); tests/python_bridge.rs runs the real binary on a temp program, asserts sqrt(2)=1.41421356, n=42 (run/eval share __main__), interpolated float; SKIPS (passes) when init returns -1.
+- Verified in Codespace: cargo test all suites ok (3 lib unit + 2 lsp + conformance + unit + 1 python_bridge), conformance 50/50, every example runs; py example correct under BOTH gcc (STILL_CC=gcc) and tcc (doctor default); error path verified: py.run("x=1/0") prints traceback + returns -1, py.eval("x") panics `python:0: panic: NameError: name 'x' is not defined`, exit 1.
+- ci.yml bench gate hardened: best-of-3 for both sides before the ≤3x check (plain bash loops + if-guards — no `[ ] && cmd` lines, set -e would kill the script on false comparisons), diff of outputs kept.
+- v0.3.0 release engineering: version bumps (Cargo.toml/lock, lib.rs VERSION, vscode package.json + README, SETUP-WINDOWS.md, cc.rs tcc URLs → v0.3.0 assets), RELEASE_NOTES.md rewritten (new features + py troubleshooting), ROADMAP-STATUS.md added (honest 13-phase + addenda mapping), tcc zips re-attached to v0.3.0 from the PC.
+
 ## Next steps (priority order)
 
-1. `any`/dynamic type for heterogeneous dicts (the #1 Python-compat gap).
-2. String builder / `+=` folding for io.write_lines-style loops (quadratic today).
+1. `any`/dynamic type for heterogeneous dicts (the #1 Python-compat gap; needs a tagged still_value runtime design — deferral rationale in ROADMAP-STATUS.md).
+2. Closures: capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures.
 3. Borrow-free mutation story for structs in lists (`xs[i].x = v` works; `xs[i] = xs[i]` copies).
-4. Closure capture-by-value; then stdlib sort/map/filter/each over closures.
-5. LSP server binary (`still lsp` on JSON-RPC stdio) so Neovim/others get what VSCode has.
-6. Match follow-ups: tuple/list/struct patterns + exhaustiveness (literal int/str cases landed; contains-based lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
-7. Bench suite in CI (SoA particle update vs C reference, fail >10% regression).
-8. CPython bridge: `use py` with py.init/py.run/py.call over the C ABI hub.
-9. Crash-only debugging → real stepping (needs DWARF work in the C backend).
-10. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces).
+4. String builder / `+=` folding for io.write_lines-style loops (quadratic today).
+5. Match follow-ups: tuple/list/struct patterns + exhaustiveness (literal int/str cases landed; contains-based lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
+6. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces).
+7. Crash-only debugging → real stepping (needs DWARF work in the C backend).
+8. LSP follow-ups: find-references, rename, cross-module completion (the binary itself shipped in v0.3.0).
