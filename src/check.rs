@@ -238,7 +238,7 @@ impl Checker {
         }
         if let Some(r) = &e.ret {
             if !ok(r) {
-                self.diags.push(err(&e.span, "extern functions can only return int, float or bool".into()));
+                self.diags.push(err(&e.span, "extern return types must be int, float, bool or str (use a wrapper for anything else)".into()));
             }
         }
     }
@@ -1547,6 +1547,7 @@ impl Checker {
             Some(TypeAnnot::Int) => Ty::Int,
             Some(TypeAnnot::Float) => Ty::Float,
             Some(TypeAnnot::Bool) => Ty::Bool,
+            Some(TypeAnnot::Str) => Ty::Str,
             _ => Ty::NoneTy,
         };
         Some(Tx { ty: ret, span: sp.clone(), x: X::CallExtern(name.to_string(), args) })
@@ -3248,6 +3249,7 @@ impl Checker {
                 Some(TypeAnnot::Int) => Ty::Int,
                 Some(TypeAnnot::Float) => Ty::Float,
                 Some(TypeAnnot::Bool) => Ty::Bool,
+                Some(TypeAnnot::Str) => Ty::Str,
                 _ => Ty::NoneTy,
             };
             self.prog.externs.push(ExternDecl {

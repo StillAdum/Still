@@ -1,0 +1,23 @@
+# Python bridge demo: embed CPython in a Still program at run time.
+# libpython is loaded dynamically — a Python install must exist on the
+# machine, but nothing is linked in. If it cannot be found automatically,
+# set STILL_PYTHON_DLL to the exact dll/so path.
+
+use py
+
+func demo():
+    if py.init() != 0:
+        print("libpython not found - skipping (set STILL_PYTHON_DLL)")
+        return
+
+    # statements and imports go through run()
+    py.run("import math")
+    py.run("n = 6 * 7")
+
+    # expressions go through eval(); Still values interpolate with {..}
+    print("sqrt(2) = " + py.eval("math.sqrt(2)"))
+    print("n = " + py.eval("n"))
+    x = 45.0
+    print("sin({x}) = " + py.eval("math.sin({x})"))
+
+demo()

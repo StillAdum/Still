@@ -165,6 +165,14 @@ int64_t still_write_file(still_str* path, still_str* data);
 still_str* still_get_env(still_str* name);
 void still_sleep_ms(int64_t ms);
 
+/* Python bridge: libpython is dlopen'ed/LoadLibrary'ed at run time (no
+   link-time dependency). STILL_PYTHON_DLL overrides the search list.
+   still_py_eval returns a borrowed NUL-terminated string valid until the next
+   py call; call sites copy it via still_str_new immediately. */
+int64_t still_py_init(void);
+int64_t still_py_run(const char* code);
+const char* still_py_eval(const char* expr);
+
 
 #ifdef STIL_DEBUG
 static inline int64_t still_add(int64_t a, int64_t b, const char* file, int64_t line) {

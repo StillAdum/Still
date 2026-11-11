@@ -917,3 +917,186 @@ void still_tostr_add_soa_stub(still_sb* sb, void* p) {
     still_sb_add_int(sb, h->len);
     still_sb_c(sb, ')');
 }
+
+/* ---------------------------------------------------------------- Python bridge */
+/* CPython embedded at run time: libpython is loaded via dlopen/LoadLibrary, so
+   programs that never use py have no link-time dependency on it.
+   STILL_PYTHON_DLL overrides the built-in search list. The bridge is
+   single-threaded: the main thread holds the GIL after init; do not call py
+   functions from other threads. */
+
+#ifdef _WIN32
+static HMODULE g_py_dll = NULL;
+#else
+#include <dlfcn.h>
+static void* g_py_dll = NULL;
+#endif
+
+static int g_py_syms_ok = 0;
+
+static int (*p_Py_IsInitialized)(void);
+static void (*p_Py_InitializeEx)(int);
+static int (*p_PyRun_SimpleString)(const char*);
+static void* (*p_PyRun_String)(const char*, int, void*, void*);
+static void* (*p_PyImport_ImportModule)(const char*);
+static void* (*p_PyModule_GetDict)(void*);
+static void* (*p_PyObject_Str)(void*);
+static const char* (*p_PyUnicode_AsUTF8)(void*);
+static void (*p_Py_DecRef)(void*);
+static void* (*p_PyErr_Occurred)(void);
+static void (*p_PyErr_Print)(void);
+static void (*p_PyErr_Fetch)(void**, void**, void**);
+static void (*p_PyErr_NormalizeException)(void**, void**, void**);
+static void* (*p_PyObject_GetAttrString)(void*, const char*);
+
+static void* py_sym(const char* name) {
+#ifdef _WIN32
+    return (void*)GetProcAddress(g_py_dll, name);
+#else
+    return dlsym(g_py_dll, name);
+#endif
+}
+
+static int py_load(void) {
+    if (g_py_dll) return 1;
+    const char* ov = getenv("STILL_PYTHON_DLL");
+    if (ov && ov[0]) {
+#ifdef _WIN32
+        g_py_dll = LoadLibraryA(ov);
+#else
+        g_py_dll = dlopen(ov, RTLD_NOW | RTLD_GLOBAL);
+#endif
+        if (g_py_dll) return 1;
+    }
+#ifdef _WIN32
+    /* newest first; python3.dll (stable ABI forwarder) last as a fallback */
+    static const char* cands[] = {
+        "python314.dll", "python313.dll", "python312.dll", "python311.dll",
+        "python310.dll", "python39.dll", "python3.dll", NULL,
+    };
+    for (int i = 0; cands[i]; i++) {
+        g_py_dll = LoadLibraryA(cands[i]);
+        if (g_py_dll) return 1;
+    }
+#else
+    /* newest first; runtime soname, then the dev symlink, then the macOS name */
+    static const char* vers[] = { "14", "13", "12", "11", "10", "9", "8", NULL };
+    char buf[64];
+    for (int i = 0; vers[i]; i++) {
+        snprintf(buf, sizeof(buf), "libpython3.%s.so.1.0", vers[i]);
+        g_py_dll = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+        if (g_py_dll) return 1;
+        snprintf(buf, sizeof(buf), "libpython3.%s.so", vers[i]);
+        g_py_dll = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+        if (g_py_dll) return 1;
+        snprintf(buf, sizeof(buf), "libpython3.%s.dylib", vers[i]);
+        g_py_dll = dlopen(buf, RTLD_NOW | RTLD_GLOBAL);
+        if (g_py_dll) return 1;
+    }
+    g_py_dll = dlopen("libpython3.so", RTLD_NOW | RTLD_GLOBAL);
+    if (g_py_dll) return 1;
+#endif
+    return 0;
+}
+
+static int py_syms(void) {
+    if (g_py_syms_ok) return 1;
+    struct { const char* name; void** slot; } tab[] = {
+        { "Py_IsInitialized", (void**)&p_Py_IsInitialized },
+        { "Py_InitializeEx", (void**)&p_Py_InitializeEx },
+        { "PyRun_SimpleString", (void**)&p_PyRun_SimpleString },
+        { "PyRun_String", (void**)&p_PyRun_String },
+        { "PyImport_ImportModule", (void**)&p_PyImport_ImportModule },
+        { "PyModule_GetDict", (void**)&p_PyModule_GetDict },
+        { "PyObject_Str", (void**)&p_PyObject_Str },
+        { "PyUnicode_AsUTF8", (void**)&p_PyUnicode_AsUTF8 },
+        { "Py_DecRef", (void**)&p_Py_DecRef },
+        { "PyErr_Occurred", (void**)&p_PyErr_Occurred },
+        { "PyErr_Print", (void**)&p_PyErr_Print },
+        { "PyErr_Fetch", (void**)&p_PyErr_Fetch },
+        { "PyErr_NormalizeException", (void**)&p_PyErr_NormalizeException },
+        { "PyObject_GetAttrString", (void**)&p_PyObject_GetAttrString },
+    };
+    for (int i = 0; i < (int)(sizeof(tab) / sizeof(tab[0])); i++) {
+        *tab[i].slot = py_sym(tab[i].name);
+        if (!*tab[i].slot) return 0;
+    }
+    g_py_syms_ok = 1;
+    return 1;
+}
+
+static int py_ensure_init(void) {
+    if (!py_load()) return 0;
+    if (!py_syms()) return 0;
+    if (!p_Py_IsInitialized()) p_Py_InitializeEx(0);
+    return p_Py_IsInitialized() ? 1 : 0;
+}
+
+int64_t still_py_init(void) {
+    if (!py_ensure_init()) {
+        fprintf(stderr, "still: python bridge: could not load libpython (set STILL_PYTHON_DLL)\n");
+        return -1;
+    }
+    return 0;
+}
+
+int64_t still_py_run(const char* code) {
+    if (!py_ensure_init()) return -1;
+    if (p_PyRun_SimpleString(code) != 0) {
+        if (p_PyErr_Occurred()) p_PyErr_Print();
+        return -1;
+    }
+    return 0;
+}
+
+const char* still_py_eval(const char* expr) {
+    if (!py_ensure_init()) still_panic("python", 0, "cannot load libpython (set STILL_PYTHON_DLL)");
+    void* mod = p_PyImport_ImportModule("__main__");
+    if (!mod) still_panic("python", 0, "cannot get the __main__ module");
+    void* dict = p_PyModule_GetDict(mod);
+    void* r = p_PyRun_String(expr, 258 /* Py_eval_input */, dict, dict);
+    p_Py_DecRef(mod);
+    if (!r) {
+        void* t = NULL, *v = NULL, *tb = NULL;
+        char tn[64] = "Error";
+        char vm[256] = "";
+        p_PyErr_Fetch(&t, &v, &tb);
+        p_PyErr_NormalizeException(&t, &v, &tb);
+        if (t) {
+            void* name = p_PyObject_GetAttrString(t, "__name__");
+            if (name) {
+                const char* s = p_PyUnicode_AsUTF8(name);
+                if (s) snprintf(tn, sizeof(tn), "%s", s);
+                p_Py_DecRef(name);
+            }
+            p_Py_DecRef(t);
+        }
+        if (v) {
+            void* so = p_PyObject_Str(v);
+            if (so) {
+                const char* s = p_PyUnicode_AsUTF8(so);
+                if (s) snprintf(vm, sizeof(vm), "%s", s);
+                p_Py_DecRef(so);
+            }
+            p_Py_DecRef(v);
+        }
+        if (tb) p_Py_DecRef(tb);
+        char msg[384];
+        snprintf(msg, sizeof(msg), "%s: %s", tn, vm[0] ? vm : "<no message>");
+        still_panic("python", 0, msg);
+    }
+    void* so = p_PyObject_Str(r);
+    const char* s = so ? p_PyUnicode_AsUTF8(so) : "";
+    int64_t n = (int64_t)strlen(s);
+    static char* eval_buf = NULL;
+    static int64_t eval_cap = 0;
+    if (n + 1 > eval_cap) {
+        eval_cap = n + 64;
+        char* nb = (char*)realloc(eval_buf, (size_t)eval_cap);
+        if (!nb) still_panic("memory", 0, "out of memory");
+        eval_buf = nb;
+    }
+    memcpy(eval_buf, s, (size_t)n + 1);
+    if (so) p_Py_DecRef(so);
+    return eval_buf;
+}

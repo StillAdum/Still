@@ -2072,7 +2072,23 @@ impl Emitter {
                 }
                 let ret = ed.as_ref().map(|d| resolve_deep(&d.c_ret)).unwrap_or(Ty::NoneTy);
                 let call = format!("{}({})", name, adapted.join(", "));
-                if self.ty_has_refs(&ret) {
+                if matches!(ret, Ty::Str) {
+                    // C functions that "return str" hand back a borrowed
+                    // NUL-terminated const char*. Copy it into a retained
+                    // still_str exactly once (never call the C function a
+                    // second time just to take strlen). The pointer temp is
+                    // borrowed, not owned, so it is not reg_temp'ed.
+                    let p = self.newtmp();
+                    self.set_line(&sp);
+                    self.line(format!("const char* {} = {};", p, call));
+                    let t = self.newtmp();
+                    self.line(format!(
+                        "still_str* {} = still_str_new({}, (int64_t)strlen({}));",
+                        t, p, p
+                    ));
+                    self.reg_temp(&t, Ty::Str);
+                    t
+                } else if self.ty_has_refs(&ret) {
                     let t = self.newtmp();
                     self.set_line(&sp);
                     let __h0 = self.ctype(&ret);

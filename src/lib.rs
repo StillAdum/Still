@@ -63,6 +63,7 @@ pub const STD_MODDING: &str = include_str!("stdlib/modding.strc");
 pub const STD_SERVER: &str = include_str!("stdlib/server.strc");
 pub const STD_ANALYTICS: &str = include_str!("stdlib/analytics.strc");
 pub const STD_ANTIDDOS: &str = include_str!("stdlib/antiddos.strc");
+pub const STD_PY: &str = include_str!("stdlib/py.strc");
 
 pub fn std_modules() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -113,6 +114,7 @@ pub fn std_modules() -> Vec<(&'static str, &'static str)> {
         ("server", STD_SERVER),
         ("analytics", STD_ANALYTICS),
         ("antiddos", STD_ANTIDDOS),
+        ("py", STD_PY),
     ]
 }
 

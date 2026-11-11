@@ -1,0 +1,29 @@
+# Python bridge: embed CPython in a Still program at run time.
+# libpython is loaded dynamically (dlopen/LoadLibrary) — nothing is linked in,
+# but a Python installation must be present on the machine. If it cannot be
+# found automatically, set STILL_PYTHON_DLL to the exact dll/so path.
+# Single-threaded: call py functions from the main thread only.
+
+extern "C":
+    func still_py_init() -> int
+    func still_py_run(code: str) -> int
+    func still_py_eval(expr: str) -> str
+
+# Initialize the embedded interpreter. Returns 0 on success, -1 if libpython
+# could not be loaded or initialized (details go to stderr).
+func init() -> int:
+    return still_py_init()
+
+# Run Python statements (imports, assignments, defs...). Returns 0 on success,
+# -1 on error (the Python traceback is printed to stderr). State is shared
+# with eval() through the __main__ namespace.
+func run(code: str) -> int:
+    return still_py_run(code)
+
+# Evaluate one Python expression and return its str() result. Import modules
+# with run() first. Still values interpolate into the code with {..}:
+#     py.run("import math")
+#     print(py.eval("math.sqrt({x})"))
+# Panics with the Python exception name and message on error.
+func eval(expr: str) -> str:
+    return still_py_eval(expr)
