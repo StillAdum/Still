@@ -3,6 +3,7 @@ pub mod cc;
 pub mod check;
 pub mod emit_c;
 pub mod lexer;
+pub mod lsp;
 pub mod parser;
 pub mod span;
 
@@ -126,13 +127,58 @@ fn load_module(path: &Path) -> Result<String, String> {
         .map_err(|e| format!("cannot read {}: {}", path.display(), e))
 }
 
-pub fn load_program(main: &Path) -> Result<Loaded, String> {
-    let main_src = load_module(main)?;
-    let main_dir = main.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+fn normalize_src(s: &str) -> String {
+    s.strip_prefix('\u{feff}').unwrap_or(s).replace("\r\n", "\n")
+}
+
+/// Scan a module's statements for `use` and enqueue the dependency sources
+/// (embedded std modules first, then local .strc files next to the main file).
+fn collect_uses(
+    stmts: &[ast::Stmt],
+    main_dir: &Path,
+    std: &HashMap<String, &'static str>,
+    loaded: &HashSet<String>,
+    queue: &mut Vec<(String, String, Option<PathBuf>)>,
+) -> Result<(), String> {
+    for s in stmts {
+        if let ast::Stmt::Use { target, .. } = s {
+            if target.ends_with(".strc") {
+                let p = main_dir.join(target);
+                let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "m".into());
+                if !loaded.contains(&stem) && !queue.iter().any(|(n, _, _)| *n == stem) {
+                    let text = load_module(&p).map_err(|e| format!("use '{}' failed: {}", target, e))?;
+                    queue.push((stem, text, Some(p)));
+                }
+            } else if let Some(text) = std.get(target) {
+                if !loaded.contains(target) && !queue.iter().any(|(n, _, _)| n == target) {
+                    queue.push((target.clone(), text.to_string(), None));
+                }
+            } else {
+                let local = main_dir.join(format!("{}.strc", target));
+                if local.exists() && !loaded.contains(target) && !queue.iter().any(|(n, _, _)| n == target) {
+                    let text = load_module(&local).map_err(|e| format!("use '{}' failed: {}", target, e))?;
+                    queue.push((target.clone(), text, Some(local)));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Load a program whose main module is ALREADY parsed. Shared by
+/// load_program (from disk) and check_text (editor text).
+fn load_parsed(
+    main_name: &str,
+    main_stmts: Vec<ast::Stmt>,
+    main_dir: &Path,
+) -> Result<Loaded, String> {
     let std: HashMap<String, &'static str> = std_modules().into_iter().map(|(n, s)| (n.to_string(), s)).collect();
     let mut sources: Vec<ModSrc> = Vec::new();
     let mut loaded: HashSet<String> = HashSet::new();
-    let mut queue: Vec<(String, String, Option<PathBuf>)> = vec![("main".to_string(), main_src, None)];
+    let mut queue: Vec<(String, String, Option<PathBuf>)> = Vec::new();
+    loaded.insert(main_name.to_string());
+    collect_uses(&main_stmts, main_dir, &std, &loaded, &mut queue)?;
+    sources.push(ModSrc { name: main_name.to_string(), stmts: main_stmts });
     while let Some((name, src, path)) = queue.pop() {
         if loaded.contains(&name) {
             continue;
@@ -143,31 +189,42 @@ pub fn load_program(main: &Path) -> Result<Loaded, String> {
             let msgs: Vec<String> = diags.iter().map(|d| d.to_string()).collect();
             return Err(format!("{}\n{}", name, msgs.join("\n")));
         }
-        for s in &stmts {
-            if let ast::Stmt::Use { target, .. } = s {
-                if target.ends_with(".strc") {
-                    let p = main_dir.join(target);
-                    let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "m".into());
-                    if !loaded.contains(&stem) {
-                        let text = load_module(&p).map_err(|e| format!("use '{}' failed: {}", target, e))?;
-                        queue.push((stem, text, Some(p)));
-                    }
-                } else if let Some(text) = std.get(target) {
-                    if !loaded.contains(target) {
-                        queue.push((target.clone(), text.to_string(), None));
-                    }
-                } else {
-                    let local = main_dir.join(format!("{}.strc", target));
-                    if local.exists() && !loaded.contains(target) {
-                        let text = load_module(&local).map_err(|e| format!("use '{}' failed: {}", target, e))?;
-                        queue.push((target.clone(), text, Some(local)));
-                    }
-                }
-            }
-        }
+        collect_uses(&stmts, main_dir, &std, &loaded, &mut queue)?;
         sources.push(ModSrc { name: name.clone(), stmts });
     }
     Ok(Loaded { sources, externs_needed: true })
+}
+
+pub fn load_program(main: &Path) -> Result<Loaded, String> {
+    let src = load_module(main)?;
+    let norm = normalize_src(&src);
+    let label = main.to_string_lossy().to_string();
+    let (stmts, diags) = parser::parse(&norm, label.as_str());
+    if !diags.is_empty() {
+        let msgs: Vec<String> = diags.iter().map(|d| d.to_string()).collect();
+        return Err(format!("main\n{}", msgs.join("\n")));
+    }
+    let main_dir = main.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    load_parsed("main", stmts, &main_dir)
+}
+
+/// Check a program from in-memory text (LSP didOpen/didChange). `main` is the
+/// file the text belongs to on disk — `use` statements resolve relative to its
+/// directory, so sibling modules still load while the buffer is unsaved.
+pub fn check_text(src: &str, main: &Path) -> Result<CompileOutput, String> {
+    let norm = normalize_src(src);
+    let label = main.to_string_lossy().to_string();
+    let (stmts, pdiags) = parser::parse(&norm, label.as_str());
+    if !pdiags.is_empty() {
+        return Ok(CompileOutput { c: String::new(), diags: pdiags });
+    }
+    let main_dir = main.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let loaded = load_parsed("main", stmts, &main_dir)?;
+    let (prog, diags) = check_program(loaded.sources, "main", true);
+    if !diags.is_empty() {
+        return Ok(CompileOutput { c: String::new(), diags });
+    }
+    Ok(CompileOutput { c: emit_c::emit(&prog), diags: Vec::new() })
 }
 
 pub struct CompileOutput {
@@ -333,57 +390,88 @@ fn compile_and_capture(f: &Path, bdir: &Path, release: bool) -> Result<(String, 
     Ok((String::from_utf8_lossy(&outp.stdout).to_string(), outp.status.code().unwrap_or(1)))
 }
 
-pub fn ide_symbols(main: &Path) -> Result<String, String> {
-    let src = load_module(main)?;
-    let (stmts, diags) = parser::parse(&src, main.to_string_lossy().to_string().as_str());
-    let mut syms: Vec<String> = Vec::new();
-    if !diags.is_empty() {
-        return Ok(format!("{{\"symbols\":[],\"errors\":{}}}", diags.len()));
-    }
+pub struct Sym {
+    pub name: String,
+    pub kind: &'static str,
+    pub line: u32,
+    pub detail: String,
+}
+
+/// Top-level symbols of one module, shared by the VSCode JSON commands and the
+/// LSP (documentSymbol/hover/completion).
+pub fn file_symbols(src: &str, label: &str) -> Vec<Sym> {
+    let norm = normalize_src(src);
+    let (stmts, _) = parser::parse(&norm, label);
+    let mut syms: Vec<Sym> = Vec::new();
     for s in &stmts {
         match s {
             ast::Stmt::FuncDef(f) => {
                 let params: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-                syms.push(format!(
-                    "{{\"name\":\"{}\",\"kind\":\"function\",\"line\":{},\"detail\":\"({})\"}}",
-                    f.name,
-                    f.span.line,
-                    params.join(", ")
-                ));
+                syms.push(Sym {
+                    name: f.name.clone(),
+                    kind: "function",
+                    line: f.span.line,
+                    detail: params.join(", "),
+                });
             }
             ast::Stmt::TypeDef(t) => {
-                syms.push(format!("{{\"name\":\"{}\",\"kind\":\"type\",\"line\":{},\"detail\":\"type\"}}", t.name, t.span.line));
+                syms.push(Sym { name: t.name.clone(), kind: "type", line: t.span.line, detail: "type".into() });
                 for m in &t.methods {
-                    syms.push(format!(
-                        "{{\"name\":\"{}\",\"kind\":\"method\",\"line\":{},\"detail\":\"{}.{}\"}}",
-                        m.name, m.span.line, t.name, m.name
-                    ));
+                    syms.push(Sym {
+                        name: m.name.clone(),
+                        kind: "method",
+                        line: m.span.line,
+                        detail: format!("{}.{}", t.name, m.name),
+                    });
                 }
                 for fl in &t.fields {
-                    syms.push(format!(
-                        "{{\"name\":\"{}\",\"kind\":\"field\",\"line\":{},\"detail\":\"{}.{}\"}}",
-                        fl.name, fl.span.line, t.name, fl.name
-                    ));
+                    syms.push(Sym {
+                        name: fl.name.clone(),
+                        kind: "field",
+                        line: fl.span.line,
+                        detail: format!("{}.{}", t.name, fl.name),
+                    });
                 }
             }
             ast::Stmt::Use { target, alias, .. } => {
-                syms.push(format!(
-                    "{{\"name\":\"{}\",\"kind\":\"module\",\"line\":0,\"detail\":\"use {}\"}}",
-                    alias.clone().unwrap_or_else(|| target.clone()),
-                    target
-                ));
+                syms.push(Sym {
+                    name: alias.clone().unwrap_or_else(|| target.clone()),
+                    kind: "module",
+                    line: 0,
+                    detail: format!("use {}", target),
+                });
             }
             ast::Stmt::Assign { targets, op: None, .. } => {
                 for t in targets {
                     if let ast::Expr::Ident(n, sp) = t {
-                        syms.push(format!("{{\"name\":\"{}\",\"kind\":\"variable\",\"line\":{},\"detail\":\"\"}}", n, sp.line));
+                        syms.push(Sym { name: n.clone(), kind: "variable", line: sp.line, detail: String::new() });
                     }
                 }
             }
             _ => {}
         }
     }
-    Ok(format!("{{\"symbols\":[{}]}}", syms.join(",")))
+    syms
+}
+
+pub fn ide_symbols(main: &Path) -> Result<String, String> {
+    let src = load_module(main)?;
+    let label = main.to_string_lossy().to_string();
+    let (_, diags) = parser::parse(normalize_src(&src).as_str(), label.as_str());
+    if !diags.is_empty() {
+        return Ok(format!("{{\"symbols\":[],\"errors\":{}}}", diags.len()));
+    }
+    let syms = file_symbols(&src, label.as_str());
+    let out: Vec<String> = syms
+        .iter()
+        .map(|s| {
+            format!(
+                "{{\"name\":\"{}\",\"kind\":\"{}\",\"line\":{},\"detail\":\"{}\"}}",
+                s.name, s.kind, s.line, s.detail
+            )
+        })
+        .collect();
+    Ok(format!("{{\"symbols\":[{}]}}", out.join(",")))
 }
 
 pub fn ide_check(main: &Path) -> Result<String, String> {

@@ -16,6 +16,7 @@ fn usage() {
     eprintln!("  still setup-cc");
     eprintln!("  still ide symbols FILE.strc");
     eprintln!("  still ide check FILE.strc");
+    eprintln!("  still lsp");
     eprintln!("  still version");
 }
 
@@ -240,6 +241,10 @@ fn main() {
         }
         "doctor" => {
             println!("{}", doctor());
+        }
+        "lsp" => {
+            let code = still::lsp::serve();
+            exit(code);
         }
         "setup-cc" => {
             match setup_cc() {
