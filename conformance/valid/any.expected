@@ -1,0 +1,50 @@
+[1, "one", 2.5, true, none]
+5
+one
+3.0
+list
+int
+{"c": 2.5, "a": 1, "b": "two"}
+3
+two
+5.0
+dict
+42 int
+hi str
+2.5 float
+true bool
+none none
+true
+13 42
+0.5 1.0
+true true true
+true false
+43
+84.0
+3
+1
+one
+2.5
+true
+none
+0 1
+1 one
+2 2.5
+3 true
+4 none
+1
+2
+3
+0 1
+1 2
+2 3
+true
+false
+true
+true
+true
+empty ok
+truthy ok
+greeting
+small
+done

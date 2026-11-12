@@ -686,10 +686,7 @@ impl Checker {
                 for i in items {
                     xs.push(self.infer(ctx, i)?);
                 }
-                let mut elem = xs[0].ty.clone();
-                for x in &xs[1..] {
-                    elem = self.unify_elems(elem.clone(), x.ty.clone(), &sp, "list")?;
-                }
+                let elem = self.widen_elems(&xs, &sp, "list")?;
                 Some(Tx { ty: Ty::List(Rc::new(elem)), span: sp, x: X::ListLit(xs) })
             }
             Expr::DictLit(pairs, _) => {
@@ -709,14 +706,10 @@ impl Checker {
                         x: X::DictLit(Vec::new()),
                     });
                 }
-                let mut kt = xs[0].0.ty.clone();
-                let mut vt = xs[0].1.ty.clone();
-                for (k, v) in &xs[1..] {
-                    kt = self.unify_elems(kt, k.ty.clone(), &sp, "dict key")?;
-                    vt = self.unify_elems(vt, v.ty.clone(), &sp, "dict value")?;
-                }
+                let kt = self.widen_elems(&xs.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(), &sp, "dict key")?;
+                let vt = self.widen_elems(&xs.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(), &sp, "dict value")?;
                 match resolve(&kt) {
-                    Ty::Int | Ty::Str | Ty::Var(_) => {}
+                    Ty::Int | Ty::Str | Ty::Var(_) | Ty::Any => {}
                     other => {
                         self.diags.push(err(&sp, format!("dict keys must be int or str, not {}", ty_name(&other))));
                         return None;
@@ -782,24 +775,33 @@ impl Checker {
             Expr::In(item, cont, neg, _) => {
                 let it = self.infer(ctx, item)?;
                 let ct = self.infer(ctx, cont)?;
+                let item_any = matches!(resolve(&it.ty), Ty::Any);
                 match resolve(&ct.ty) {
                     Ty::List(elem) => {
                         let et = (*elem).clone();
-                        if !self.compat(&it.ty, &et) {
+                        let et_any = matches!(resolve(&et), Ty::Any);
+                        if !item_any && !et_any && !self.compat(&it.ty, &et) {
                             self.diags.push(err(&sp, format!("'{}' cannot be in a list of {}", ty_name(&it.ty), ty_name(&et))));
                             return None;
                         }
                     }
                     Ty::Dict(k, _) => {
                         let kt = (*k).clone();
-                        if !self.compat(&it.ty, &kt) {
+                        let kt_any = matches!(resolve(&kt), Ty::Any);
+                        if !item_any && !kt_any && !self.compat(&it.ty, &kt) {
                             self.diags.push(err(&sp, format!("dict keys are {}, not {}", ty_name(&kt), ty_name(&it.ty))));
                             return None;
                         }
                     }
                     Ty::Str => {
-                        if !matches!(resolve(&it.ty), Ty::Str) {
+                        if !item_any && !matches!(resolve(&it.ty), Ty::Str) {
                             self.diags.push(err(&sp, "'in' on strings needs a str on the left".into()));
+                            return None;
+                        }
+                    }
+                    Ty::Any => {
+                        if !boxable(&it.ty) {
+                            self.diags.push(err(&sp, format!("cannot search for {} inside an 'any' value", ty_name(&it.ty))));
                             return None;
                         }
                     }
@@ -817,7 +819,7 @@ impl Checker {
             Expr::IsNone(inner, neg, _) => {
                 let v = self.infer(ctx, inner)?;
                 match resolve(&v.ty) {
-                    Ty::Nullable(_) | Ty::NoneTy | Ty::Var(_) => {}
+                    Ty::Nullable(_) | Ty::NoneTy | Ty::Var(_) | Ty::Any => {}
                     other => {
                         self.diags.push(err(&sp, format!("{} can never be none, so this check is not needed", ty_name(&other))));
                     }
@@ -917,8 +919,42 @@ impl Checker {
         ty_eq(&ra, &rb)
     }
 
-    fn unify_elems(&mut self, a: Ty, b: Ty, sp: &Span, what: &str) -> Option<Ty> {
-        let ra = resolve(&a);
+    /// Unify a run of element types for a list/dict literal. When plain
+    /// unification fails but every element is a resolved, boxable type,
+    /// the literal widens to `any` elements instead (heterogeneous lists
+    /// and dicts). Otherwise the original unification error is reported.
+    fn widen_elems(&mut self, xs: &[Tx], sp: &Span, what: &str) -> Option<Ty> {
+        if xs.is_empty() {
+            // `[]` keeps an unbound element hole so `[int] = []` and friends
+            // still work; it becomes `any` only if the context demands it.
+            return Some(Ty::Var(Rc::new(std::cell::RefCell::new(None))));
+        }
+        let dmark = self.diags.len();
+        let mut elem = xs[0].ty.clone();
+        for x in &xs[1..] {
+            match self.unify_elems(elem.clone(), x.ty.clone(), sp, what) {
+                Some(t) => elem = t,
+                None => {
+                    self.diags.truncate(dmark);
+                    let all_resolved = xs.iter().all(|x| !matches!(resolve(&x.ty), Ty::Var(_)));
+                    if all_resolved && xs.iter().all(|x| boxable(&x.ty)) {
+                        return Some(Ty::Any);
+                    }
+                    let mut e2 = xs[0].ty.clone();
+                    for x in &xs[1..] {
+                        match self.unify_elems(e2.clone(), x.ty.clone(), sp, what) {
+                            Some(t) => e2 = t,
+                            None => return None,
+                        }
+                    }
+                    return Some(e2);
+                }
+            }
+        }
+        Some(elem)
+    }
+
+    fn unify_elems(&mut self, a: Ty, b: Ty, sp: &Span, what: &str) -> Option<Ty> {        let ra = resolve(&a);
         let rb = resolve(&b);
         if let Ty::Var(cell) = &ra {
             if matches!(rb, Ty::Var(_)) {
@@ -989,6 +1025,13 @@ impl Checker {
         }
         let l = resolve(&lt.ty);
         let r = resolve(&rt.ty);
+        if matches!(l, Ty::Any) || matches!(r, Ty::Any) {
+            if matches!(l, Ty::NoneTy) || matches!(r, Ty::NoneTy) {
+                self.diags.push(err(sp, "cannot use none in arithmetic; check for none first".into()));
+                return None;
+            }
+            return Some(Tx { ty: Ty::Any, span: sp.clone(), x: X::Arith(op, Box::new(lt), Box::new(rt)) });
+        }
         let num2 = |lc: bool, rc: bool, out: &Ty| -> Option<Tx> {
             let l2 = if lc {
                 Tx { ty: Ty::Float, span: lt.span.clone(), x: X::AsFloat(Box::new(lt.clone())) }
@@ -1143,6 +1186,7 @@ impl Checker {
             (Ty::Tuple(a), Ty::Tuple(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| ty_eq(x, y)) && !ordered,
             (Ty::Named(a), Ty::Named(b)) => a == b,
             (Ty::Never, _) | (_, Ty::Never) => true,
+            (Ty::Any, _) | (_, Ty::Any) => true,
             _ => false,
         };
         if !ok {
@@ -1223,6 +1267,20 @@ impl Checker {
                     return None;
                 }
                 Some(Tx { ty: (*v).clone(), span: sp.clone(), x: X::Index(Box::new(ot), Box::new(it)) })
+            }
+            Ty::Any => {
+                let it = match resolve(&it.ty) {
+                    Ty::Int | Ty::Str | Ty::Never => it,
+                    Ty::Var(cell) => {
+                        *cell.borrow_mut() = Some(Ty::Int);
+                        it
+                    }
+                    other => {
+                        self.diags.push(err(sp, format!("'any' values are indexed by int or str, not {}", ty_name(&other))));
+                        return None;
+                    }
+                };
+                Some(Tx { ty: Ty::Any, span: sp.clone(), x: X::Index(Box::new(ot), Box::new(it)) })
             }
             _ => {
                 let it = match resolve(&it.ty) {
@@ -1632,7 +1690,7 @@ impl Checker {
             "len" => {
                 need!(1, "len");
                 match resolve(&args[0].ty) {
-                    Ty::Str | Ty::List(_) | Ty::Dict(..) => {}
+                    Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => {}
                     Ty::Named(q) if self.prog.structs.get(&q).map(|s| s.is_soa).unwrap_or(false) => {}
                     other => {
                         self.diags.push(err(sp, format!("len works on str, list, dict and @soa values, not {}", ty_name(&other))));
@@ -1693,7 +1751,7 @@ impl Checker {
             "int" => {
                 need!(1, "int");
                 match resolve(&args[0].ty) {
-                    Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Never => BR::Yes(Some(Tx { ty: Ty::Int, span: sp.clone(), x: X::Builtin(Bi::IntOf, args) })),
+                    Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Never | Ty::Any => BR::Yes(Some(Tx { ty: Ty::Int, span: sp.clone(), x: X::Builtin(Bi::IntOf, args) })),
                     other => {
                         self.diags.push(err(sp, format!("int() works on int, float, str and bool, not {}", ty_name(&other))));
                         BR::Yes(None)
@@ -1703,7 +1761,7 @@ impl Checker {
             "float" => {
                 need!(1, "float");
                 match resolve(&args[0].ty) {
-                    Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Never => BR::Yes(Some(Tx { ty: Ty::Float, span: sp.clone(), x: X::Builtin(Bi::FloatOf, args) })),
+                    Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Never | Ty::Any => BR::Yes(Some(Tx { ty: Ty::Float, span: sp.clone(), x: X::Builtin(Bi::FloatOf, args) })),
                     other => {
                         self.diags.push(err(sp, format!("float() works on int, float, str and bool, not {}", ty_name(&other))));
                         BR::Yes(None)
@@ -2092,8 +2150,28 @@ fn assign_ok(src: &Ty, dst: &Ty) -> Option<&'static str> {
         (Ty::Int, Ty::Float) => Some("widen"),
         (Ty::NoneTy, Ty::Nullable(_)) => Some("null"),
         (Ty::NoneTy, Ty::NoneTy) => Some("same"),
+        (_, Ty::Any) if boxable(&s) => Some("boxany"),
         (_, Ty::Nullable(inner)) if ty_eq(&s, inner) => Some("box"),
         _ => None,
+    }
+}
+
+/// Can a value of this type be stored in an `any`? Scalars, str, none and
+/// (recursively) lists/dicts whose elements are boxable. Unbound element
+/// holes are pinned to `any` so `a: any = []` works. Structs, tuples and
+/// nullables cannot go into an `any`.
+fn boxable(t: &Ty) -> bool {
+    match resolve(t) {
+        Ty::List(e) => boxable(&e),
+        Ty::Dict(k, v) => boxable(&k) && boxable(&v),
+        Ty::Var(cell) => match &*cell.borrow() {
+            Some(inner) => boxable(inner),
+            None => {
+                *cell.borrow_mut() = Some(Ty::Any);
+                true
+            }
+        },
+        other => any_box_tag(&other).is_some(),
     }
 }
 
@@ -2586,8 +2664,9 @@ impl Checker {
         }
         let sty = self.infer(ctx, subject)?;
         let subj_is_int = matches!(resolve(&sty.ty), Ty::Int);
-        if !matches!(resolve(&sty.ty), Ty::Int | Ty::Str) {
-            self.diags.push(err(span, format!("match subject must be int or str, not {}", ty_name(&sty.ty))));
+        let subj_is_any = matches!(resolve(&sty.ty), Ty::Any);
+        if !matches!(resolve(&sty.ty), Ty::Int | Ty::Str | Ty::Any) {
+            self.diags.push(err(span, format!("match subject must be int, str or any, not {}", ty_name(&sty.ty))));
             return None;
         }
         let mut if_arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
@@ -2614,7 +2693,7 @@ impl Checker {
                         return None;
                     }
                 };
-                if is_int_pat != subj_is_int {
+                if !subj_is_any && is_int_pat != subj_is_int {
                     self.diags.push(err(vsp, if subj_is_int {
                         "str case value cannot match an int subject".into()
                     } else {
@@ -2796,6 +2875,30 @@ impl Checker {
                 out.push(CS::ForList { list: keys_tx, var: id, body: b });
                 Some(())
             }
+            Ty::Any => {
+                if vars.len() > 2 {
+                    self.diags.push(err(span, "looping over an 'any' value takes one variable (the item), or two for (index, item)".into()));
+                    return None;
+                }
+                ctx.scopes.push(HashMap::new());
+                let iv = if vars.len() == 2 { Some(ctx.declare(&vars[0], Ty::Int)) } else { None };
+                let ev = ctx.declare(&vars[vars.len() - 1], Ty::Any);
+                for v in vars {
+                    ctx.loop_vars.insert(v.clone());
+                }
+                ctx.loops += 1;
+                let mut b = Vec::new();
+                for st in body {
+                    let _ = self.check_stmt(ctx, st, &mut b);
+                }
+                ctx.loops -= 1;
+                for v in vars {
+                    ctx.loop_vars.remove(v);
+                }
+                ctx.scopes.pop();
+                out.push(CS::ForAny { list: it, ivar: iv, var: ev, body: b });
+                Some(())
+            }
             Ty::Named(qual) => {
                 let si = self.prog.structs.get(&qual).cloned();
                 if let Some(si) = si {
@@ -2865,6 +2968,22 @@ impl Checker {
                         return None;
                     }
                     let cur = ctx.locals[id as usize].1.clone();
+                    // `s = s + t` on a str local folds into the in-place append
+                    // so loops stay linear instead of quadratic.
+                    if matches!(resolve(&cur), Ty::Str) {
+                        if let Expr::Binary(BinOp::Add, lhs, _, _) = value {
+                            if let Expr::Ident(iname, _) = lhs.as_ref() {
+                                if iname == name {
+                                    if let X::Arith(_, _, rtx) = &vt.x {
+                                        if matches!(resolve(&rtx.ty), Ty::Str) {
+                                            out.push(CS::AugAssign { place: Place::Local(id), op: BinOp::Add, value: (**rtx).clone(), ty: cur, span: span.clone() });
+                                            return Some(());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if matches!(resolve(&cur), Ty::NoneTy) {
                         if !matches!(resolve(&vt.ty), Ty::NoneTy | Ty::Never) {
                             if let Ty::Var(cell) = &cur {
@@ -2894,6 +3013,21 @@ impl Checker {
                         return Some(());
                     }
                     let cur = self.prog.globals[&cname].ty.clone();
+                    // same `s = s + t` fold for globals
+                    if matches!(resolve(&cur), Ty::Str) {
+                        if let Expr::Binary(BinOp::Add, lhs, _, _) = value {
+                            if let Expr::Ident(iname, _) = lhs.as_ref() {
+                                if iname == name {
+                                    if let X::Arith(_, _, rtx) = &vt.x {
+                                        if matches!(resolve(&rtx.ty), Ty::Str) {
+                                            out.push(CS::AugAssign { place: Place::Global(cname.clone()), op: BinOp::Add, value: (**rtx).clone(), ty: cur, span: span.clone() });
+                                            return Some(());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if matches!(resolve(&cur), Ty::NoneTy) {
                         if !matches!(resolve(&vt.ty), Ty::NoneTy | Ty::Never) {
                             if let Ty::Var(cell) = &cur {

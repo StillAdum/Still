@@ -14,6 +14,7 @@ pub enum TypeAnnot {
     Dict(Box<TypeAnnot>, Box<TypeAnnot>),
     Tuple(Vec<TypeAnnot>),
     Nullable(Box<TypeAnnot>),
+    Any,
     Named(String),
 }
 
@@ -238,6 +239,7 @@ pub enum Ty {
     Dict(Rc<Ty>, Rc<Ty>),
     Tuple(Rc<Vec<Ty>>),
     Named(String),
+    Any,
     Never,
 }
 
@@ -263,7 +265,7 @@ pub fn resolve_deep(t: &Ty) -> Ty {
 
 pub fn ty_eq(a: &Ty, b: &Ty) -> bool {
     match (resolve(a), resolve(b)) {
-        (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) | (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) | (Ty::NoneTy, Ty::NoneTy) | (Ty::Never, Ty::Never) => true,
+        (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) | (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) | (Ty::NoneTy, Ty::NoneTy) | (Ty::Never, Ty::Never) | (Ty::Any, Ty::Any) => true,
         (Ty::Named(a), Ty::Named(b)) => a == b,
         (Ty::Nullable(a), Ty::Nullable(b)) => ty_eq(&a, &b),
         (Ty::List(a), Ty::List(b)) => ty_eq(&a, &b),
@@ -289,12 +291,13 @@ pub fn ty_name(t: &Ty) -> String {
             format!("({})", parts.join(", "))
         }
         Ty::Named(n) => n,
+        Ty::Any => "any".into(),
         Ty::Never => "never".into(),
     }
 }
 
 pub fn is_ref_ty(t: &Ty) -> bool {
-    matches!(resolve(t), Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Named(_))
+    matches!(resolve(t), Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Named(_) | Ty::Any)
 }
 
 #[derive(Clone, Debug)]
@@ -440,6 +443,12 @@ pub enum CS {
         evar: u32,
         body: Vec<CS>,
     },
+    ForAny {
+        list: Tx,
+        ivar: Option<u32>,
+        var: u32,
+        body: Vec<CS>,
+    },
     ForStr {
         s: Tx,
         var: u32,
@@ -525,6 +534,7 @@ pub fn ty_tag(t: &Ty) -> String {
         Ty::Bool => "b".into(),
         Ty::Str => "s".into(),
         Ty::NoneTy => "n".into(),
+        Ty::Any => "a".into(),
         Ty::Var(c) => match &*c.borrow() {
             Some(inner) => ty_tag(&inner.clone()),
             None => "v".into(),
@@ -541,6 +551,49 @@ pub fn ty_tag(t: &Ty) -> String {
     }
 }
 
+/// Pack a Still type into the runtime `any` tag: base char in the lowest
+/// byte, then child bytes ('l'+child for lists, 'd'+key+value for dicts).
+/// Returns None when the type is not boxable (structs, tuples, nullables)
+/// or nests deeper than the 8 bytes an int64 tag can hold.
+pub fn any_box_tag(t: &Ty) -> Option<i64> {
+    fn pack(t: &Ty, out: &mut Vec<u8>) -> bool {
+        match resolve(t) {
+            Ty::Int | Ty::Never => out.push(b'i'),
+            Ty::Float => out.push(b'f'),
+            Ty::Bool => out.push(b'b'),
+            Ty::Str => out.push(b's'),
+            Ty::NoneTy => out.push(b'n'),
+            Ty::Any => out.push(b'a'),
+            Ty::List(e) => {
+                out.push(b'l');
+                if !pack(&e, out) {
+                    return false;
+                }
+            }
+            Ty::Dict(k, v) => {
+                out.push(b'd');
+                if !pack(&k, out) {
+                    return false;
+                }
+                if !pack(&v, out) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+        out.len() <= 8
+    }
+    let mut out = Vec::new();
+    if !pack(t, &mut out) {
+        return None;
+    }
+    let mut tag: i64 = 0;
+    for (i, b) in out.iter().enumerate() {
+        tag |= (*b as i64) << (8 * i);
+    }
+    Some(tag)
+}
+
 pub fn annot_to_ty(a: &TypeAnnot, structs: &HashMap<String, StructInfo>) -> Result<Ty, String> {
     Ok(match a {
         TypeAnnot::Int => Ty::Int,
@@ -548,10 +601,17 @@ pub fn annot_to_ty(a: &TypeAnnot, structs: &HashMap<String, StructInfo>) -> Resu
         TypeAnnot::Bool => Ty::Bool,
         TypeAnnot::Str => Ty::Str,
         TypeAnnot::None => Ty::NoneTy,
+        TypeAnnot::Any => Ty::Any,
         TypeAnnot::List(e) => Ty::List(Rc::new(annot_to_ty(e, structs)?)),
         TypeAnnot::Dict(k, v) => Ty::Dict(Rc::new(annot_to_ty(k, structs)?), Rc::new(annot_to_ty(v, structs)?)),
         TypeAnnot::Tuple(ts) => Ty::Tuple(Rc::new(ts.iter().map(|t| annot_to_ty(t, structs)).collect::<Result<_, _>>()?)),
-        TypeAnnot::Nullable(b) => Ty::Nullable(Box::new(annot_to_ty(b, structs)?)),
+        TypeAnnot::Nullable(b) => {
+            let inner = annot_to_ty(b, structs)?;
+            if matches!(inner, Ty::Any) {
+                return Err("'any?' is not needed; any can already hold none".into());
+            }
+            Ty::Nullable(Box::new(inner))
+        }
         TypeAnnot::Named(n) => {
             if structs.contains_key(n) {
                 Ty::Named(n.clone())

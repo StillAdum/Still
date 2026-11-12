@@ -1,0 +1,35 @@
+# The `any` type: one variable, many shapes.
+xs = [1, "one", 2.5, true, none]
+print(xs)
+
+d = {"a": 1, "b": "two"}
+print(d)
+
+x: any = 42
+print(x, type_of(x))
+x = "now a string"
+print(x, type_of(x))
+x = [1, 2, 3]
+print(x, type_of(x))
+x = {"k": 1}
+print(x, type_of(x))
+
+func describe(v: any) -> str:
+    return "a " + type_of(v)
+
+print(describe(7))
+print(describe("s"))
+print(describe([1]))
+
+func twice(v: any) -> any:
+    return v * 2
+
+print(twice(21))
+print(twice(1.5))
+
+y: any = 10
+if y > 5:
+    print("big")
+for i, v in enumerate(xs):
+    print(i, v)
+print("done")

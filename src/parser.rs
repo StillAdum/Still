@@ -1566,6 +1566,7 @@ impl Parser {
                     "bool" => TypeAnnot::Bool,
                     "str" => TypeAnnot::Str,
                     "none" => TypeAnnot::None,
+                    "any" => TypeAnnot::Any,
                     _ => TypeAnnot::Named(n),
                 }
             }

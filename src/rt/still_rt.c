@@ -1100,3 +1100,756 @@ const char* still_py_eval(const char* expr) {
     if (so) p_Py_DecRef(so);
     return eval_buf;
 }
+
+// ===================== any =====================
+
+static void still_any_destroy(void* p) {
+    still_any* a = (still_any*)p;
+    int c = (int)(a->tag & 0xFF);
+    if (c == 's' || c == 'l' || c == 'd') still_release(a->u.p);
+    free(p);
+}
+
+static still_any* still_any_alloc(int64_t tag) {
+    still_any* a = (still_any*)malloc(sizeof(still_any));
+    if (!a) still_panic("memory", 0, "out of memory");
+    a->hdr.rc = 1;
+    a->hdr.destroy = still_any_destroy;
+    a->tag = tag;
+    a->u.p = NULL;
+    return a;
+}
+
+still_any* still_any_none(void) { return still_any_alloc('n'); }
+
+still_any* still_any_new_i(int64_t v) {
+    still_any* a = still_any_alloc('i');
+    a->u.i = v;
+    return a;
+}
+
+still_any* still_any_new_f(double v) {
+    still_any* a = still_any_alloc('f');
+    a->u.f = v;
+    return a;
+}
+
+still_any* still_any_new_b(int64_t v) {
+    still_any* a = still_any_alloc('b');
+    a->u.i = v ? 1 : 0;
+    return a;
+}
+
+still_any* still_any_new_s(still_str* s) {
+    still_any* a = still_any_alloc('s');
+    a->u.p = still_retain(s);
+    return a;
+}
+
+still_any* still_any_new_p(void* p, int64_t tag) {
+    still_any* a = still_any_alloc(tag);
+    a->u.p = still_retain(p);
+    return a;
+}
+
+// ---- raw container geometry (mirrors the layouts the compiler emits) ----
+// list: hdr(0..16) len@16 cap@24 data@32 ; dict: hdr len@16 cap@24 used@32 slots@40
+static int64_t any_len_raw(void* p) { return *(int64_t*)((char*)p + 16); }
+static void* any_list_data(void* p) { return *(void**)((char*)p + 32); }
+static int64_t any_dict_cap(void* p) { return *(int64_t*)((char*)p + 24); }
+static void* any_dict_slots(void* p) { return *(void**)((char*)p + 40); }
+
+static int any_tag_size(int64_t tag) {
+    int c = (int)(tag & 0xFF);
+    if (c == 'l') return 1 + any_tag_size(tag >> 8);
+    if (c == 'd') {
+        int ks = any_tag_size(tag >> 8);
+        return 1 + ks + any_tag_size(tag >> (8 * (1 + ks)));
+    }
+    return 1;
+}
+
+// slot geometry for a dict whose packed tag is `tag`
+static void any_dict_geo(int64_t tag, int64_t* stride, int64_t* koff, int64_t* voff) {
+    int64_t ks = any_tag_size(tag >> 8);
+    int kt = (int)((tag >> 8) & 0xFF);
+    int64_t vs = 8 * (1 + ks);
+    int vt = (int)((tag >> vs) & 0xFF);
+    int64_t ksz = (kt == 'b') ? 1 : 8;
+    int64_t vsz = (vt == 'b') ? 1 : 8;
+    int64_t kalign = (kt == 'b') ? 1 : 8;
+    int64_t valign = (vt == 'b') ? 1 : 8;
+    int64_t ko = kalign; // align_up(1, kalign) after the 1-byte state field
+    int64_t vo = ((ko + ksz) + valign - 1) / valign * valign;
+    int64_t align = kalign > valign ? kalign : valign;
+    *stride = ((vo + vsz) + align - 1) / align * align;
+    *koff = ko;
+    *voff = vo;
+}
+
+static int64_t any_stride_of(int64_t ctag) { return ((ctag & 0xFF) == 'b') ? 1 : 8; }
+
+// ---- equality ----
+
+static int any_cmp_eq(int64_t ctag, void* b1, int64_t st1, int64_t o1, int64_t i1,
+                      void* b2, int64_t st2, int64_t o2, int64_t i2) {
+    char* p = (char*)b1 + i1 * st1 + o1;
+    char* q = (char*)b2 + i2 * st2 + o2;
+    int c = (int)(ctag & 0xFF);
+    if (c == 'a') return still_any_eq(*(still_any**)p, *(still_any**)q);
+    if (c == 's') return still_str_eq(*(still_str**)p, *(still_str**)q);
+    if (c == 'l' || c == 'd') return any_raw_eq(ctag, *(void**)p, *(void**)q);
+    if (c == 'b') return (*(unsigned char*)p != 0) == (*(unsigned char*)q != 0);
+    if (c == 'f') return *(double*)p == *(double*)q;
+    return *(int64_t*)p == *(int64_t*)q;
+}
+
+static int any_raw_eq(int64_t tag, void* p, void* q) {
+    if (p == q) return 1;
+    if (!p || !q) return 0;
+    int c = (int)(tag & 0xFF);
+    if (c == 'l') {
+        int64_t ct = tag >> 8;
+        if (any_len_raw(p) != any_len_raw(q)) return 0;
+        void* da = any_list_data(p);
+        void* db = any_list_data(q);
+        int64_t st = any_stride_of(ct);
+        for (int64_t i = 0; i < any_len_raw(p); i++) {
+            if (!any_cmp_eq(ct, da, st, 0, i, db, st, 0, i)) return 0;
+        }
+        return 1;
+    }
+    if (c == 'd') {
+        int64_t ks = any_tag_size(tag >> 8);
+        int64_t kt = tag >> 8;
+        int64_t vt = tag >> (8 * (1 + ks));
+        if (any_len_raw(p) != any_len_raw(q)) return 0;
+        int64_t stride, koff, voff;
+        any_dict_geo(tag, &stride, &koff, &voff);
+        void* sa = any_dict_slots(p);
+        void* sb = any_dict_slots(q);
+        for (int64_t i = 0; i < any_dict_cap(p); i++) {
+            if (*((unsigned char*)sa + i * stride) != 1) continue;
+            int found = 0;
+            for (int64_t j = 0; j < any_dict_cap(q); j++) {
+                if (*((unsigned char*)sb + j * stride) != 1) continue;
+                if (any_cmp_eq(kt, sa, stride, koff, i, sb, stride, koff, j)) {
+                    found = any_cmp_eq(vt, sa, stride, voff, i, sb, stride, voff, j);
+                    break;
+                }
+            }
+            if (!found) return 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+int still_any_eq(still_any* a, still_any* b) {
+    if (a == b) return 1;
+    // NULL is a valid representation of "the none any" (from zero-init), so
+    // tag extraction must be NULL-safe.
+    int ca = a ? (int)(a->tag & 0xFF) : 'n';
+    int cb = b ? (int)(b->tag & 0xFF) : 'n';
+    if (ca == 'n' && cb == 'n') return 1;
+    if (ca == 'n' || cb == 'n') return 0;
+    if (!a || !b) return 0;
+    int64_t ta = a->tag, tb = b->tag;
+    if (ca == 'i' && cb == 'f') return (double)a->u.i == b->u.f;
+    if (ca == 'f' && cb == 'i') return a->u.f == (double)b->u.i;
+    if (ta != tb) return 0;
+    if (ca == 'i' || ca == 'b') return a->u.i == b->u.i;
+    if (ca == 'f') return a->u.f == b->u.f;
+    if (ca == 's') return still_str_eq((still_str*)a->u.p, (still_str*)b->u.p);
+    if (ca == 'l' || ca == 'd') return any_raw_eq(ta, a->u.p, b->u.p);
+    return 0;
+}
+
+// ---- truthiness / ordering ----
+
+int still_any_truth(still_any* a) {
+    if (!a || (a->tag & 0xFF) == 'n') return 0;
+    switch (a->tag & 0xFF) {
+        case 'i': case 'b': return a->u.i != 0;
+        case 'f': return a->u.f != 0.0;
+        case 's': return a->u.p && ((still_str*)a->u.p)->len > 0;
+        case 'l': case 'd': return a->u.p && any_len_raw(a->u.p) > 0;
+    }
+    return 1;
+}
+
+static double any_num_f(still_any* a) {
+    return ((a->tag & 0xFF) == 'f') ? a->u.f : (double)a->u.i;
+}
+
+static int any_order(int64_t r, int op) {
+    switch (op) {
+        case 2: return r < 0;
+        case 3: return r <= 0;
+        case 4: return r > 0;
+        default: return r >= 0;
+    }
+}
+
+static int any_cmp_child(int64_t ctag, void* b1, int64_t st1, int64_t o1, int64_t i1,
+                         void* b2, int64_t st2, int64_t o2, int64_t i2) {
+    char* p = (char*)b1 + i1 * st1 + o1;
+    char* q = (char*)b2 + i2 * st2 + o2;
+    int c = (int)(ctag & 0xFF);
+    if (c == 'i' || c == 'b' || c == 'f') {
+        double x = (c == 'f') ? *(double*)p : (c == 'b') ? (double)(*(unsigned char*)p != 0) : (double)*(int64_t*)p;
+        double y = (c == 'f') ? *(double*)q : (c == 'b') ? (double)(*(unsigned char*)q != 0) : (double)*(int64_t*)q;
+        return x < y ? -1 : (x > y ? 1 : 0);
+    }
+    if (c == 's') {
+        int64_t r = still_str_cmp(*(still_str**)p, *(still_str**)q);
+        return r < 0 ? -1 : (r > 0 ? 1 : 0);
+    }
+    if (c == 'l') return any_raw_cmp(ctag, *(void**)p, *(void**)q);
+    still_panic("still", 0, "TypeError: this value is not orderable");
+    return 0;
+}
+
+static int any_raw_cmp(int64_t tag, void* p, void* q) {
+    if (p == q) return 0;
+    if (!p || !q) still_panic("still", 0, "TypeError: cannot order none");
+    int64_t ct = tag >> 8;
+    int64_t n = any_len_raw(p), m = any_len_raw(q);
+    void* da = any_list_data(p);
+    void* db = any_list_data(q);
+    int64_t st = any_stride_of(ct);
+    int64_t lim = n < m ? n : m;
+    for (int64_t i = 0; i < lim; i++) {
+        int r = any_cmp_child(ct, da, st, 0, i, db, st, 0, i);
+        if (r) return r;
+    }
+    return n == m ? 0 : (n < m ? -1 : 1);
+}
+
+int still_any_cmp(int op, still_any* a, still_any* b) {
+    if (op == 0) return still_any_eq(a, b);
+    if (op == 1) return !still_any_eq(a, b);
+    if (!a || !b) still_panic("still", 0, "TypeError: cannot order none values");
+    int ca = (int)(a->tag & 0xFF), cb = (int)(b->tag & 0xFF);
+    if ((ca == 'i' || ca == 'b' || ca == 'f') && (cb == 'i' || cb == 'b' || cb == 'f')) {
+        double x = any_num_f(a), y = any_num_f(b);
+        int64_t r = x < y ? -1 : (x > y ? 1 : 0);
+        return any_order(r, op);
+    }
+    if (ca == 's' && cb == 's') return any_order(still_str_cmp((still_str*)a->u.p, (still_str*)b->u.p), op);
+    if (ca == 'l' && cb == 'l' && a->tag == b->tag) return any_order(any_raw_cmp(a->tag, a->u.p, b->u.p), op);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "TypeError: '%s' and '%s' cannot be ordered", still_any_typename(a), still_any_typename(b));
+    still_panic("still", 0, msg);
+    return 0;
+}
+
+// ---- arithmetic ----
+
+static const char* any_op_sym(int op) {
+    switch (op) {
+        case 0: return "+";
+        case 1: return "-";
+        case 2: return "*";
+        case 3: return "/";
+        case 4: return "//";
+        case 5: return "%";
+        case 6: return "**";
+        case 7: return "<<";
+        case 8: return ">>";
+        case 9: return "&";
+        case 10: return "|";
+        default: return "^";
+    }
+}
+
+static void* any_list_concat(void* p, void* q, int64_t tag) {
+    int64_t ct = tag >> 8;
+    int c = (int)(ct & 0xFF);
+    int64_t w = (c == 'b') ? 1 : 8;
+    int64_t ln = any_len_raw(p) + any_len_raw(q);
+    int64_t cap = ln < 8 ? 8 : ln;
+    void* r = malloc(32);
+    if (!r) still_panic("memory", 0, "out of memory");
+    ((still_hdr*)r)->rc = 1;
+    ((still_hdr*)r)->destroy = ((still_hdr*)p)->destroy;
+    *(int64_t*)((char*)r + 16) = 0;
+    *(int64_t*)((char*)r + 24) = cap;
+    void* data = malloc((size_t)cap * (size_t)w);
+    if (!data) still_panic("memory", 0, "out of memory");
+    *(void**)((char*)r + 32) = data;
+    memcpy(data, any_list_data(p), (size_t)(any_len_raw(p) * w));
+    memcpy((char*)data + any_len_raw(p) * w, any_list_data(q), (size_t)(any_len_raw(q) * w));
+    *(int64_t*)((char*)r + 16) = ln;
+    if (c == 's' || c == 'l' || c == 'd' || c == 'a') {
+        for (int64_t i = 0; i < ln; i++) still_retain(*(void**)((char*)data + i * 8));
+    }
+    return r;
+}
+
+still_any* still_any_binop(int op, still_any* a, still_any* b) {
+    if (!a || !b || (a->tag & 0xFF) == 'n' || (b->tag & 0xFF) == 'n') {
+        still_panic("still", 0, "TypeError: cannot use none in arithmetic");
+    }
+    int ca = (int)(a->tag & 0xFF), cb = (int)(b->tag & 0xFF);
+    int numa = (ca == 'i' || ca == 'b' || ca == 'f');
+    int numb = (cb == 'i' || cb == 'b' || cb == 'f');
+    if (numa && numb) {
+        if (ca == 'f' || cb == 'f') {
+            double x = any_num_f(a), y = any_num_f(b);
+            switch (op) {
+                case 0: return still_any_new_f(x + y);
+                case 1: return still_any_new_f(x - y);
+                case 2: return still_any_new_f(x * y);
+                case 3: return still_any_new_f(x / y);
+                case 4: return still_any_new_f(still_floordivf(x, y));
+                case 5: return still_any_new_f(still_fmodf_(x, y));
+                case 6: return still_any_new_f(pow(x, y));
+                default: still_panic("still", 0, "TypeError: bitwise operations need whole numbers");
+            }
+        }
+        int64_t x = a->u.i, y = b->u.i;
+        switch (op) {
+            case 0: return still_any_new_i(still_add(x, y, "still", 0));
+            case 1: return still_any_new_i(still_sub(x, y, "still", 0));
+            case 2: return still_any_new_i(still_mul(x, y, "still", 0));
+            case 3: return still_any_new_f((double)x / (double)y);
+            case 4: return still_any_new_i(still_floordiv(x, y, "still", 0));
+            case 5: return still_any_new_i(still_imod(x, y, "still", 0));
+            case 6: return still_any_new_i(still_ipow(x, y, "still", 0));
+            case 7: return still_any_new_i(x << y);
+            case 8: return still_any_new_i(x >> y);
+            case 9: return still_any_new_i(x & y);
+            case 10: return still_any_new_i(x | y);
+            default: return still_any_new_i(x ^ y);
+        }
+    }
+    if (ca == 's' && cb == 's' && op == 0) {
+        return still_any_new_s(still_str_cat((still_str*)a->u.p, (still_str*)b->u.p));
+    }
+    if (ca == 'l' && cb == 'l' && a->tag == b->tag && op == 0) {
+        return still_any_new_p(any_list_concat(a->u.p, b->u.p, a->tag), a->tag);
+    }
+    char msg[160];
+    snprintf(msg, sizeof(msg), "TypeError: unsupported operand type(s) for %s: '%s' and '%s'",
+             any_op_sym(op), still_any_typename(a), still_any_typename(b));
+    still_panic("still", 0, msg);
+    return NULL;
+}
+
+// ---- indexing / membership ----
+
+// build an OWNED any cell holding element i of (base, stride, off) typed by ctag
+static still_any* any_child_own(int64_t ctag, void* base, int64_t stride, int64_t off, int64_t i) {
+    char* p = (char*)base + i * stride + off;
+    int c = (int)(ctag & 0xFF);
+    if (c == 'i') return still_any_new_i(*(int64_t*)p);
+    if (c == 'f') return still_any_new_f(*(double*)p);
+    if (c == 'b') return still_any_new_b((int64_t)(*(unsigned char*)p));
+    if (c == 's') return still_any_new_s(*(still_str**)p);
+    if (c == 'a') {
+        still_any* x = *(still_any**)p;
+        if (!x) return still_any_none();
+        return (still_any*)still_retain(x);
+    }
+    if (c == 'l' || c == 'd') return still_any_new_p(*(void**)p, ctag);
+    return still_any_none();
+}
+
+// compare raw element i of (base, stride, off) against an any cell
+static int any_child_eq_cell(int64_t ctag, void* base, int64_t stride, int64_t off, int64_t i, still_any* item) {
+    char* p = (char*)base + i * stride + off;
+    int c = (int)(ctag & 0xFF);
+    if (c == 'a') return still_any_eq(*(still_any**)p, item);
+    still_any t;
+    t.hdr.rc = 0;
+    t.hdr.destroy = NULL;
+    if (c == 'i') { t.tag = 'i'; t.u.i = *(int64_t*)p; }
+    else if (c == 'f') { t.tag = 'f'; t.u.f = *(double*)p; }
+    else if (c == 'b') { t.tag = 'b'; t.u.i = (int64_t)(*(unsigned char*)p != 0); }
+    else if (c == 's') { t.tag = 's'; t.u.p = *(void**)p; }
+    else if (c == 'l' || c == 'd') { t.tag = ctag; t.u.p = *(void**)p; }
+    else return 0;
+    return still_any_eq(&t, item);
+}
+
+static int64_t any_dict_find_cell(int64_t tag, void* d, still_any* key, int64_t* stride, int64_t* koff, int64_t* voff) {
+    any_dict_geo(tag, stride, koff, voff);
+    void* slots = any_dict_slots(d);
+    int64_t kt = tag >> 8;
+    for (int64_t i = 0; i < any_dict_cap(d); i++) {
+        if (*((unsigned char*)slots + i * *stride) != 1) continue;
+        if (any_child_eq_cell(kt, slots, *stride, *koff, i, key)) return i;
+    }
+    return -1;
+}
+
+still_any* still_any_index_i(still_any* a, int64_t i) {
+    if (!a) still_panic("still", 0, "TypeError: cannot index none");
+    int c = (int)(a->tag & 0xFF);
+    if (c == 'l') {
+        void* p = a->u.p;
+        int64_t ct = a->tag >> 8;
+        int64_t n = any_len_raw(p);
+        if (i < 0) i += n;
+        if (i < 0 || i >= n) still_panic("still", 0, "index out of range");
+        return any_child_own(ct, any_list_data(p), any_stride_of(ct), 0, i);
+    }
+    if (c == 'd') {
+        still_any k;
+        k.hdr.rc = 0;
+        k.hdr.destroy = NULL;
+        k.tag = 'i';
+        k.u.i = i;
+        int64_t stride, koff, voff;
+        int64_t j = any_dict_find_cell(a->tag, a->u.p, &k, &stride, &koff, &voff);
+        if (j < 0) still_panic("still", 0, "missing key in dict");
+        int64_t ks = any_tag_size(a->tag >> 8);
+        int64_t vt = a->tag >> (8 * (1 + ks));
+        return any_child_own(vt, any_dict_slots(a->u.p), stride, voff, j);
+    }
+    if (c == 's') {
+        return still_any_new_s(still_str_index((still_str*)a->u.p, i, "still", 0));
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "TypeError: '%s' object is not subscriptable", still_any_typename(a));
+    still_panic("still", 0, msg);
+    return NULL;
+}
+
+still_any* still_any_index_s(still_any* a, still_str* k) {
+    if (!a) still_panic("still", 0, "TypeError: cannot index none");
+    int c = (int)(a->tag & 0xFF);
+    if (c == 'd') {
+        still_any k2;
+        k2.hdr.rc = 0;
+        k2.hdr.destroy = NULL;
+        k2.tag = 's';
+        k2.u.p = k;
+        int64_t stride, koff, voff;
+        int64_t j = any_dict_find_cell(a->tag, a->u.p, &k2, &stride, &koff, &voff);
+        if (j < 0) still_panic("still", 0, "missing key in dict");
+        int64_t ks = any_tag_size(a->tag >> 8);
+        int64_t vt = a->tag >> (8 * (1 + ks));
+        return any_child_own(vt, any_dict_slots(a->u.p), stride, voff, j);
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "TypeError: '%s' indices must be integers", still_any_typename(a));
+    still_panic("still", 0, msg);
+    return NULL;
+}
+
+int still_any_in(still_any* item, still_any* cont) {
+    if (!item || !cont) still_panic("still", 0, "TypeError: argument of type 'none' is not iterable");
+    int c = (int)(cont->tag & 0xFF);
+    if (c == 's') {
+        if ((item->tag & 0xFF) != 's') {
+            still_panic("still", 0, "TypeError: 'in <string>' requires string as left operand");
+        }
+        return still_str_contains((still_str*)cont->u.p, (still_str*)item->u.p);
+    }
+    if (c == 'l') {
+        int64_t ct = cont->tag >> 8;
+        void* data = any_list_data(cont->u.p);
+        int64_t st = any_stride_of(ct);
+        for (int64_t i = 0; i < any_len_raw(cont->u.p); i++) {
+            if (any_child_eq_cell(ct, data, st, 0, i, item)) return 1;
+        }
+        return 0;
+    }
+    if (c == 'd') {
+        int64_t stride, koff, voff;
+        return any_dict_find_cell(cont->tag, cont->u.p, item, &stride, &koff, &voff) >= 0;
+    }
+    char msg[128];
+    snprintf(msg, sizeof(msg), "TypeError: argument of type '%s' is not iterable", still_any_typename(cont));
+    still_panic("still", 0, msg);
+    return 0;
+}
+
+// membership against a *typed* container (list/dict/str) with an any key/item
+int still_any_in_typed(int64_t ctag, void* cont, still_any* item) {
+    if (!cont) still_panic("still", 0, "TypeError: argument of type 'none' is not iterable");
+    int c = (int)(ctag & 0xFF);
+    if (c == 's') {
+        if (!item || (item->tag & 0xFF) != 's') {
+            still_panic("still", 0, "TypeError: 'in <string>' requires string as left operand");
+        }
+        return still_str_contains((still_str*)cont, (still_str*)item->u.p);
+    }
+    if (c == 'l') {
+        int64_t ct = ctag >> 8;
+        void* data = any_list_data(cont);
+        int64_t st = any_stride_of(ct);
+        for (int64_t i = 0; i < any_len_raw(cont); i++) {
+            if (any_child_eq_cell(ct, data, st, 0, i, item)) return 1;
+        }
+        return 0;
+    }
+    if (c == 'd') {
+        int64_t stride, koff, voff;
+        return any_dict_find_cell(ctag, cont, item, &stride, &koff, &voff) >= 0;
+    }
+    still_panic("still", 0, "TypeError: argument of type is not iterable");
+    return 0;
+}
+
+// ---- length / casts / names ----
+
+int64_t still_any_len(still_any* a) {
+    if (!a) still_panic("still", 0, "TypeError: object of type 'none' has no len()");
+    int c = (int)(a->tag & 0xFF);
+    if (c == 's') return ((still_str*)a->u.p)->len;
+    if (c == 'l' || c == 'd') return any_len_raw(a->u.p);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "TypeError: object of type '%s' has no len()", still_any_typename(a));
+    still_panic("still", 0, msg);
+    return 0;
+}
+
+int64_t still_any_to_int(still_any* a, const char* file, int64_t line) {
+    if (!a || (a->tag & 0xFF) == 'n') still_panic(file, line, "TypeError: int() argument must not be none");
+    int c = (int)(a->tag & 0xFF);
+    if (c == 'i' || c == 'b') return a->u.i;
+    if (c == 'f') return (int64_t)a->u.f;
+    if (c == 's') return still_str_to_int((still_str*)a->u.p, file, line);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "TypeError: int() argument must be int, float, str or bool, not '%s'", still_any_typename(a));
+    still_panic(file, line, msg);
+    return 0;
+}
+
+double still_any_to_float(still_any* a, const char* file, int64_t line) {
+    if (!a || (a->tag & 0xFF) == 'n') still_panic(file, line, "TypeError: float() argument must not be none");
+    int c = (int)(a->tag & 0xFF);
+    if (c == 'f') return a->u.f;
+    if (c == 'i' || c == 'b') return (double)a->u.i;
+    if (c == 's') return still_str_to_float((still_str*)a->u.p, file, line);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "TypeError: float() argument must be int, float, str or bool, not '%s'", still_any_typename(a));
+    still_panic(file, line, msg);
+    return 0;
+}
+
+const char* still_any_typename(still_any* a) {
+    if (!a) return "none";
+    switch (a->tag & 0xFF) {
+        case 'i': return "int";
+        case 'f': return "float";
+        case 'b': return "bool";
+        case 's': return "str";
+        case 'l': return "list";
+        case 'd': return "dict";
+    }
+    return "none";
+}
+
+// ---- printing / string conversion ----
+
+static void any_tostr_a(still_sb* sb, still_any* a, int quote);
+
+static void any_tostr_child(still_sb* sb, int64_t ctag, void* base, int64_t stride, int64_t off, int64_t i) {
+    char* p = (char*)base + i * stride + off;
+    int c = (int)(ctag & 0xFF);
+    if (c == 'i') { still_sb_add_int(sb, *(int64_t*)p); return; }
+    if (c == 'f') { still_sb_add_float(sb, *(double*)p); return; }
+    if (c == 'b') { still_sb_add_bool(sb, *(unsigned char*)p != 0); return; }
+    if (c == 's') {
+        still_sb_c(sb, '"');
+        still_sb_s(sb, *(still_str**)p);
+        still_sb_c(sb, '"');
+        return;
+    }
+    if (c == 'a') {
+        any_tostr_a(sb, *(still_any**)p, 1);
+        return;
+    }
+    if (c == 'l' || c == 'd') {
+        still_any t;
+        t.hdr.rc = 0;
+        t.hdr.destroy = NULL;
+        t.tag = ctag;
+        t.u.p = *(void**)p;
+        any_tostr_a(sb, &t, 1);
+        return;
+    }
+    still_sb_raw(sb, "none");
+}
+
+static void any_tostr_a(still_sb* sb, still_any* a, int quote) {
+    if (!a || (a->tag & 0xFF) == 'n') {
+        still_sb_raw(sb, "none");
+        return;
+    }
+    switch (a->tag & 0xFF) {
+        case 'i':
+            still_sb_add_int(sb, a->u.i);
+            return;
+        case 'f':
+            still_sb_add_float(sb, a->u.f);
+            return;
+        case 'b':
+            still_sb_add_bool(sb, a->u.i != 0);
+            return;
+        case 's':
+            if (quote) still_sb_c(sb, '"');
+            still_sb_s(sb, (still_str*)a->u.p);
+            if (quote) still_sb_c(sb, '"');
+            return;
+        case 'l': {
+            int64_t ct = a->tag >> 8;
+            void* p = a->u.p;
+            void* data = any_list_data(p);
+            int64_t st = any_stride_of(ct);
+            still_sb_c(sb, '[');
+            for (int64_t i = 0; i < any_len_raw(p); i++) {
+                if (i) still_sb_raw(sb, ", ");
+                any_tostr_child(sb, ct, data, st, 0, i);
+            }
+            still_sb_c(sb, ']');
+            return;
+        }
+        case 'd': {
+            int64_t ks = any_tag_size(a->tag >> 8);
+            int64_t kt = a->tag >> 8;
+            int64_t vt = a->tag >> (8 * (1 + ks));
+            int64_t stride, koff, voff;
+            any_dict_geo(a->tag, &stride, &koff, &voff);
+            void* slots = any_dict_slots(a->u.p);
+            still_sb_c(sb, '{');
+            int first = 1;
+            for (int64_t i = 0; i < any_dict_cap(a->u.p); i++) {
+                if (*((unsigned char*)slots + i * stride) != 1) continue;
+                if (!first) still_sb_raw(sb, ", ");
+                first = 0;
+                any_tostr_child(sb, kt, slots, stride, koff, i);
+                still_sb_raw(sb, ": ");
+                any_tostr_child(sb, vt, slots, stride, voff, i);
+            }
+            still_sb_c(sb, '}');
+            return;
+        }
+    }
+}
+
+void still_tostr_add_a(still_sb* sb, still_any* a) {
+    any_tostr_a(sb, a, 0);
+}
+
+still_str* still_any_tostr(still_any* a) {
+    still_sb* sb = still_sb_new();
+    any_tostr_a(sb, a, 0);
+    return still_sb_finish(sb);
+}
+
+still_str* still_any_repr(still_any* a) {
+    still_sb* sb = still_sb_new();
+    any_tostr_a(sb, a, 1);
+    return still_sb_finish(sb);
+}
+
+void still_print_any(still_any* a) {
+    still_str* s = still_any_tostr(a);
+    still_print_str(s);
+    still_release(s);
+}
+
+// ---- hashing ----
+
+static uint64_t any_hash_f(double f) {
+    if (f == (double)(int64_t)f && f >= -9.2e18 && f <= 9.2e18) return still_hash_i64((int64_t)f);
+    int64_t bits;
+    memcpy(&bits, &f, 8);
+    return still_hash_i64(bits);
+}
+
+static uint64_t any_hash_child(int64_t ctag, void* base, int64_t stride, int64_t off, int64_t i) {
+    char* p = (char*)base + i * stride + off;
+    int c = (int)(ctag & 0xFF);
+    if (c == 'i') return still_hash_i64(*(int64_t*)p);
+    if (c == 'b') return still_hash_i64((int64_t)(*(unsigned char*)p != 0));
+    if (c == 'f') return any_hash_f(*(double*)p);
+    if (c == 's') return still_hash_str(*(still_str**)p);
+    if (c == 'a') {
+        still_any* x = *(still_any**)p;
+        return x ? still_hash_a(x) : 0;
+    }
+    if (c == 'l' || c == 'd') return any_hash_raw(ctag, *(void**)p);
+    return 0;
+}
+
+static uint64_t any_hash_raw(int64_t tag, void* p) {
+    if (!p) return 0;
+    int c = (int)(tag & 0xFF);
+    if (c == 'l') {
+        int64_t ct = tag >> 8;
+        uint64_t h = still_hash_i64(any_len_raw(p));
+        void* data = any_list_data(p);
+        int64_t st = any_stride_of(ct);
+        for (int64_t i = 0; i < any_len_raw(p); i++) {
+            h = h * 1000003ULL + any_hash_child(ct, data, st, 0, i);
+        }
+        return h;
+    }
+    if (c == 'd') {
+        int64_t ks = any_tag_size(tag >> 8);
+        int64_t kt = tag >> 8;
+        int64_t vt = tag >> (8 * (1 + ks));
+        int64_t stride, koff, voff;
+        any_dict_geo(tag, &stride, &koff, &voff);
+        void* slots = any_dict_slots(p);
+        uint64_t acc = 0;
+        for (int64_t i = 0; i < any_dict_cap(p); i++) {
+            if (*((unsigned char*)slots + i * stride) != 1) continue;
+            uint64_t kh = any_hash_child(kt, slots, stride, koff, i);
+            uint64_t vh = any_hash_child(vt, slots, stride, voff, i);
+            acc += kh ^ (vh * 0x9E3779B97F4A7C15ULL);
+        }
+        return acc;
+    }
+    return 0;
+}
+
+uint64_t still_hash_a(still_any* a) {
+    if (!a || (a->tag & 0xFF) == 'n') return 0;
+    switch (a->tag & 0xFF) {
+        case 'i': case 'b': return still_hash_i64(a->u.i);
+        case 'f': return any_hash_f(a->u.f);
+        case 's': return still_hash_str((still_str*)a->u.p);
+        case 'l': case 'd': return any_hash_raw(a->tag, a->u.p);
+    }
+    return 0;
+}
+
+// ---- in-place string append (linear `s += t`) ----
+
+void still_str_append_inplace(still_str** slot, still_str* add) {
+    still_str* s = *slot;
+    if (!s) {
+        *slot = (still_str*)still_retain(add);
+        return;
+    }
+    if (s == add) {
+        *slot = still_str_cat(s, s);
+        still_release(s);
+        return;
+    }
+    if (s->hdr.rc == 1) {
+        int64_t n = s->len + add->len;
+        if (n > s->cap) {
+            int64_t nc = s->cap > 0 ? s->cap : 8;
+            while (nc < n + 1) nc *= 2;
+            still_str* ns = (still_str*)realloc(s, sizeof(still_str) + (size_t)nc + 1);
+            if (!ns) still_panic("memory", 0, "out of memory");
+            ns->cap = nc;
+            s = ns;
+            *slot = ns;
+        }
+        memcpy(s->bytes + s->len, add->bytes, (size_t)add->len);
+        s->len = n;
+        s->bytes[n] = 0;
+        return;
+    }
+    *slot = still_str_cat(s, add);
+    still_release(s);
+}

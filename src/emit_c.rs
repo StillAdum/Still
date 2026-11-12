@@ -309,7 +309,7 @@ impl Emitter {
 
     fn drop_stmt(&mut self, ty: &Ty, v: &str) -> String {
         match ty {
-            Ty::Str | Ty::List(_) | Ty::Dict(..) => format!("if ({v}) still_release({v});", v = v),
+            Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => format!("if ({v}) still_release({v});", v = v),
             Ty::Named(q) => {
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
@@ -369,7 +369,7 @@ impl Emitter {
 
     fn ty_has_refs(&self, t: &Ty) -> bool {
         match resolve(t) {
-            Ty::Str | Ty::List(_) | Ty::Dict(..) => true,
+            Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => true,
             Ty::Nullable(b) => self.ty_has_refs(&b),
             Ty::Named(q) => self
                 .prog
@@ -388,7 +388,7 @@ impl Emitter {
             Ty::Float => "0.0".into(),
             Ty::Bool => "false".into(),
             Ty::Str | Ty::NoneTy => "NULL".into(),
-            Ty::List(_) | Ty::Dict(..) => "NULL".into(),
+            Ty::List(_) | Ty::Dict(..) | Ty::Any => "NULL".into(),
             Ty::Nullable(inner) => {
                 let i = resolve_deep(&inner);
                 match i {
@@ -416,6 +416,7 @@ impl Emitter {
             Ty::Float => "double".into(),
             Ty::Bool => "bool".into(),
             Ty::Str | Ty::NoneTy => "still_str*".into(),
+            Ty::Any => "still_any*".into(),
             Ty::List(e) => {
                 let et = resolve_deep(&e);
                 let tag = ty_tag(&et);
@@ -473,6 +474,7 @@ impl Emitter {
             Ty::Float => "still_eq_f64".into(),
             Ty::Bool => "still_eq_bool".into(),
             Ty::Str => "still_str_eq".into(),
+            Ty::Any => "still_any_eq".into(),
             Ty::List(e) => {
                 let et = resolve_deep(&e);
                 let tag = ty_tag(&et);
@@ -545,6 +547,7 @@ impl Emitter {
                 let ct = self.ctype(&t);
                 format!("({ct})still_retain(_v)", ct = ct)
             }
+            Ty::Any => "(still_any*)still_retain(_v)".into(),
             Ty::Named(ref q) => {
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
@@ -603,7 +606,7 @@ impl Emitter {
     fn release_expr(&mut self, ty: &Ty) -> String {
         let t = resolve_deep(ty);
         match t {
-            Ty::Str | Ty::List(_) | Ty::Dict(..) => "still_release(_v)".into(),
+            Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => "still_release(_v)".into(),
             Ty::Named(ref q) => {
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
@@ -689,6 +692,7 @@ impl Emitter {
         }
         let (hashk, eqk, releasek, kct) = match resolve(k) {
             Ty::Int => ("still_hash_i64(_k)", "still_eq_i64", "((void)_k)", "int64_t"),
+            Ty::Any => ("still_hash_a(_k)", "still_any_eq", "still_release(_k)", "still_any*"),
             _ => ("still_hash_str(_k)", "still_str_eq", "still_release(_k)", "still_str*"),
         };
         let eqv = self.eq_fn(v);
@@ -997,10 +1001,25 @@ impl Emitter {
             }
             CS::AugAssign { place, op, value, ty, span } => {
                 self.bp(span);
-                let read = self.place_read(place);
-                let vexpr = self.emit_expr(value);
-                let res = self.emit_arith(*op, &read, &resolve_deep(ty), &vexpr, &resolve_deep(&value.ty), span);
-                self.assign_place(place, &resolve_deep(ty), &res, &resolve_deep(ty));
+                let pty = resolve_deep(ty);
+                let vty = resolve_deep(&value.ty);
+                // `s += t` / folded `s = s + t` on a plain str variable:
+                // reuse the buffer in place instead of cat + reassign.
+                let fast = matches!(pty, Ty::Str)
+                    && *op == BinOp::Add
+                    && matches!(vty, Ty::Str)
+                    && matches!(place, Place::Local(_) | Place::Global(_));
+                if fast {
+                    let lv = self.place_lvalue(place);
+                    let vexpr = self.emit_expr(value);
+                    self.set_line(span);
+                    self.line(format!("still_str_append_inplace(&{}, {});", lv, vexpr));
+                } else {
+                    let read = self.place_read(place);
+                    let vexpr = self.emit_expr(value);
+                    let res = self.emit_arith(*op, &read, &pty, &vexpr, &vty, span);
+                    self.assign_place(place, &pty, &res, &pty);
+                }
             }
             CS::ExprS(tx) => {
                 self.bp(&tx.span);
@@ -1080,6 +1099,40 @@ impl Emitter {
                 self.loop_local_marks.pop();
                 for sl in &mut self.locals {
                     if sl.cname == format!("v{}", var) {
+                        sl.dead = true;
+                    }
+                }
+                self.last_line += 2;
+            }
+            CS::ForAny { list, ivar, var, body } => {
+                self.bp(&list.span);
+                let l = self.as_var(list);
+                let cname = format!("v{}", var);
+                let tmark = self.temps.len();
+                let lmark = self.locals.len();
+                self.loop_temp_marks.push(tmark);
+                self.loop_local_marks.push(lmark);
+                if let Some(iv) = ivar {
+                    self.locals.push(LocalSlot { cname: format!("v{}", iv), ty: Ty::Int, dead: false });
+                    self.line(format!("int64_t v{} = 0;", iv));
+                }
+                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Any, dead: false });
+                self.raw(&format!("    for (int64_t __i = 0; __i < still_any_len({}); __i++) {{", l));
+                if let Some(iv) = ivar {
+                    self.line(format!("v{} = __i;", iv));
+                }
+                self.line(format!("still_any* {} = still_any_index_i({}, __i);", cname, l));
+                self.emit_loop_body(body);
+                let d = self.drop_stmt(&Ty::Any, &cname);
+                if !d.is_empty() {
+                    self.line(d);
+                }
+                self.raw("    }");
+                self.loop_temp_marks.pop();
+                self.loop_local_marks.pop();
+                let iname = ivar.map(|iv| format!("v{}", iv));
+                for sl in &mut self.locals {
+                    if sl.cname == cname || iname.as_deref() == Some(sl.cname.as_str()) {
                         sl.dead = true;
                     }
                 }
@@ -1485,7 +1538,7 @@ impl Emitter {
     fn old_release(&mut self, place: &Place, ty: &Ty) {
         let t = resolve_deep(ty);
         match &t {
-            Ty::Str | Ty::List(_) | Ty::Dict(..) => {
+            Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => {
                 let pl = self.place_lvalue(place);
                 self.line(format!("if ({}) still_release({});", pl, pl));
             }
@@ -1622,6 +1675,7 @@ impl Emitter {
                     expr.to_string()
                 }
             }
+            (_, Ty::Any) if !matches!(f, Ty::Any) => self.box_into_any(expr, &f),
             _ => {
                 if self.ty_has_refs(&t) || matches!(t, Ty::Tuple(_) | Ty::Named(_)) {
                     self.owned_value(expr, &t)
@@ -1644,6 +1698,45 @@ impl Emitter {
         }
         r.replace("_v", expr)
     }
+
+    /// Packed runtime tag for a boxable type (panics-free fallback for
+    /// already-checked code).
+    fn box_tag(&self, ty: &Ty) -> i64 {
+        crate::ast::any_box_tag(&resolve_deep(ty)).unwrap_or(b'i' as i64)
+    }
+
+    /// An expression that yields an owned `still_any*` holding the value.
+    /// The constructor retains ref'd args, so registered temps stay
+    /// registered (they drop at statement end) and locals keep their ref.
+    fn box_into_any(&mut self, expr: &str, ty: &Ty) -> String {
+        let t = resolve_deep(ty);
+        match &t {
+            Ty::Any => expr.to_string(),
+            Ty::NoneTy => "still_any_none()".into(),
+            Ty::Int | Ty::Never => format!("still_any_new_i((int64_t)({}))", expr),
+            Ty::Float => format!("still_any_new_f((double)({}))", expr),
+            Ty::Bool => format!("still_any_new_b((int64_t)({}))", expr),
+            Ty::Str => format!("still_any_new_s({})", expr),
+            _ => {
+                let tag = self.box_tag(&t);
+                format!("still_any_new_p((void*)({}), ((int64_t){}))", expr, tag)
+            }
+        }
+    }
+
+    /// An expression usable where the runtime borrows an `any` (binop/cmp/
+    /// in): pass `any` values through, box anything else into a temp.
+    fn box_any_borrow(&mut self, expr: &str, ty: &Ty) -> String {
+        let t = resolve_deep(ty);
+        if matches!(t, Ty::Any) {
+            return expr.to_string();
+        }
+        let bt = self.newtmp();
+        let be = self.box_into_any(expr, &t);
+        self.line(format!("still_any* {} = {};", bt, be));
+        self.reg_temp(&bt, Ty::Any);
+        bt
+    }
 }
 
 impl Emitter {
@@ -1659,6 +1752,18 @@ impl Emitter {
                 self.zero_c(&t)
             }
             (Ty::Int, Ty::Float) => format!("(double)({})", expr),
+            (_, Ty::Any) if !matches!(f, Ty::Any) => {
+                // `expr` is exclusively owned here (a consumed temp), so for
+                // ref'd types the box takes a fresh ref and the old one is
+                // handed off via release.
+                let bt = self.newtmp();
+                let be = self.box_into_any(expr, &f);
+                self.line(format!("still_any* {} = {};", bt, be));
+                if matches!(f, Ty::Str | Ty::List(_) | Ty::Dict(..)) {
+                    self.line(format!("still_release({});", expr));
+                }
+                bt
+            }
             _ => expr.to_string(),
         }
     }
@@ -1685,6 +1790,7 @@ impl Emitter {
             Ty::Bool => format!("({})", e),
             Ty::Str => format!("(({}) && ({})->len > 0)", e, e),
             Ty::List(_) | Ty::Dict(..) => format!("(({}) && ({})->len > 0)", e, e),
+            Ty::Any => format!("still_any_truth({})", e),
             Ty::Named(q) => {
                 if self.prog.structs.get(&q).map(|s| s.is_soa).unwrap_or(false) {
                     format!("(({}) && ({})->len > 0)", e, e)
@@ -1721,6 +1827,28 @@ impl Emitter {
         self.set_line(span);
         let lt = resolve_deep(lty);
         let rt = resolve_deep(rty);
+        if matches!(lt, Ty::Any) || matches!(rt, Ty::Any) {
+            let code: i64 = match op {
+                BinOp::Add => 0,
+                BinOp::Sub => 1,
+                BinOp::Mul => 2,
+                BinOp::Div => 3,
+                BinOp::FloorDiv => 4,
+                BinOp::Mod => 5,
+                BinOp::Pow => 6,
+                BinOp::Shl => 7,
+                BinOp::Shr => 8,
+                BinOp::Band => 9,
+                BinOp::Bor => 10,
+                BinOp::Bxor => 11,
+            };
+            let lb = self.box_any_borrow(l, &lt);
+            let rb = self.box_any_borrow(r, &rt);
+            let t = self.newtmp();
+            self.line(format!("still_any* {} = still_any_binop({}, {}, {});", t, code, lb, rb));
+            self.reg_temp(&t, Ty::Any);
+            return t;
+        }
         match (&lt, &rt) {
             (Ty::Int, Ty::Int) => match op {
                 BinOp::Add => format!("still_add({}, {}, __FILE__, __LINE__)", l, r),
@@ -1944,22 +2072,41 @@ impl Emitter {
             X::In(item, cont, neg) => {
                 let ie = self.emit_expr(item);
                 let ce = self.emit_expr(cont);
+                let ity = resolve_deep(&item.ty);
                 let cty = resolve_deep(&cont.ty);
-                let cond = match &cty {
-                    Ty::List(e) => {
-                        let tag = ty_tag(&resolve_deep(e));
-                        self.need_list(&resolve_deep(e));
-                        format!("still_list_{}_contains({}, {})", tag, ce, ie)
+                let cond = if matches!(cty, Ty::Any) {
+                    let ib = self.box_any_borrow(&ie, &ity);
+                    format!("still_any_in({}, {})", ib, ce)
+                } else if matches!(ity, Ty::Any) {
+                    let tag = self.box_tag(&cty);
+                    format!("still_any_in_typed(((int64_t){}), {}, {})", tag, ce, ie)
+                } else {
+                    match &cty {
+                        Ty::List(e) => {
+                            let et = resolve_deep(e);
+                            let tag = ty_tag(&et);
+                            let et_any = matches!(et, Ty::Any);
+                            // item must arrive as the element type: box into
+                            // `any` when the list holds boxed cells
+                            let ib = if et_any { self.box_any_borrow(&ie, &ity) } else { ie.clone() };
+                            self.need_list(&et);
+                            format!("still_list_{}_contains({}, {})", tag, ce, ib)
+                        }
+                        Ty::Dict(k, _) => {
+                            let kt = resolve_deep(k);
+                            let kt_any = matches!(kt, Ty::Any);
+                            let ib = if kt_any { self.box_any_borrow(&ie, &ity) } else { ie.clone() };
+                            format!(
+                                "still_dict_{}_{}_has({}, {})",
+                                ty_tag(&kt),
+                                ty_tag(&resolve_deep(&_dummy_v(&cty))),
+                                ce,
+                                ib
+                            )
+                        }
+                        Ty::Str => format!("still_str_contains({}, {})", ce, ie),
+                        _ => "false".into(),
                     }
-                    Ty::Dict(k, _) => format!(
-                        "still_dict_{}_{}_has({}, {})",
-                        ty_tag(&resolve_deep(k)),
-                        ty_tag(&resolve_deep(&_dummy_v(&cty))),
-                        ce,
-                        ie
-                    ),
-                    Ty::Str => format!("still_str_contains({}, {})", ce, ie),
-                    _ => "false".into(),
                 };
                 if *neg {
                     format!("(!{})", cond)
@@ -1971,6 +2118,7 @@ impl Emitter {
                 let e = self.emit_expr(v);
                 let vty = resolve_deep(&v.ty);
                 let cond = match &vty {
+                    Ty::Any => format!("({e} == NULL || (({e})->tag & 0xFF) == (int)'n')", e = e),
                     Ty::Nullable(inner) => {
                         let i = resolve_deep(inner);
                         match i {
@@ -2147,6 +2295,19 @@ impl Emitter {
                         self.reg_temp(&t, Ty::Str);
                         t
                     }
+                    Ty::Any => {
+                        let ity = resolve_deep(&idx.ty);
+                        let g = if matches!(ity, Ty::Str) {
+                            format!("still_any_index_s({}, {})", oe, ie)
+                        } else {
+                            format!("still_any_index_i({}, {})", oe, ie)
+                        };
+                        let t = self.newtmp();
+                        self.set_line(&sp);
+                        self.line(format!("still_any* {} = {};", t, g));
+                        self.reg_temp(&t, Ty::Any);
+                        t
+                    }
                     Ty::Tuple(_ts) => match &idx.x {
                         X::Int(k) => format!("{}.f{}", oe, k),
                         _ => format!("{}", oe),
@@ -2289,6 +2450,19 @@ impl Emitter {
         self.set_line(sp);
         let lt = resolve_deep(lty);
         let rt = resolve_deep(rty);
+        if matches!(lt, Ty::Any) || matches!(rt, Ty::Any) {
+            let code: i64 = match op {
+                CmpOp::Eq => 0,
+                CmpOp::Ne => 1,
+                CmpOp::Lt => 2,
+                CmpOp::Le => 3,
+                CmpOp::Gt => 4,
+                CmpOp::Ge => 5,
+            };
+            let lb = self.box_any_borrow(le, &lt);
+            let rb = self.box_any_borrow(re, &rt);
+            return format!("still_any_cmp({}, {}, {})", code, lb, rb);
+        }
         let o = Emitter::cmp_op_str(op);
         match (&lt, &rt) {
             (Ty::Int, Ty::Int) | (Ty::Float, Ty::Float) | (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => {
@@ -2321,6 +2495,7 @@ impl Emitter {
             Ty::Bool => "still_sb_add_bool".into(),
             Ty::Str => "still_sb_add_str".into(),
             Ty::NoneTy => "still_sb_add_none".into(),
+            Ty::Any => "still_tostr_add_a".into(),
             Ty::Var(_) => "still_sb_add_int".into(),
             Ty::List(e) => {
                 let et = resolve_deep(e);
@@ -2459,6 +2634,10 @@ impl Emitter {
             Ty::Str => {
                 let owned = self.owned_value(&e, &Ty::Str);
                 self.line(format!("still_str* {} = {};", t, owned));
+                self.reg_temp(&t, Ty::Str);
+            }
+            Ty::Any => {
+                self.line(format!("still_str* {} = still_any_tostr({});", t, e));
                 self.reg_temp(&t, Ty::Str);
             }
             Ty::List(_) | Ty::Dict(..) | Ty::Tuple(_) | Ty::Named(_) | Ty::Nullable(_) => {
@@ -2635,6 +2814,14 @@ impl Emitter {
                 }
                 "still_print_strq".into()
             }
+            Ty::Any => {
+                let key = "panyq".to_string();
+                if self.helper_keys.insert(key) {
+                    self.helpers
+                        .push("static void still_print_any_repr(still_any* a) { still_str* s = still_any_repr(a); still_print_str(s); still_release(s); }\n".to_string());
+                }
+                "still_print_any_repr".into()
+            }
             Ty::List(e) => {
                 let et = resolve_deep(e);
                 let tag = ty_tag(&et);
@@ -2783,6 +2970,7 @@ impl Emitter {
             Ty::Bool => "still_print_bool".into(),
             Ty::Str => "still_print_str".into(),
             Ty::NoneTy => "still_print_none".into(),
+            Ty::Any => "still_print_any".into(),
             Ty::List(_) | Ty::Dict(..) | Ty::Tuple(_) | Ty::Named(_) => self.repr_fn(&t),
             Ty::Nullable(inner) => {
                 let i = resolve_deep(inner);
@@ -2820,7 +3008,11 @@ impl Emitter {
             }
             Bi::Len => {
                 let e = self.emit_expr(&args[0]);
-                format!("{}->len", e)
+                if matches!(resolve_deep(&args[0].ty), Ty::Any) {
+                    format!("still_any_len({})", e)
+                } else {
+                    format!("{}->len", e)
+                }
             }
             Bi::Push => {
                 let l = self.emit_expr(&args[0]);
@@ -2887,6 +3079,7 @@ impl Emitter {
                     Ty::Float => format!("(int64_t)({})", e),
                     Ty::Str => format!("still_str_to_int({}, __FILE__, __LINE__)", e),
                     Ty::Bool => format!("(int64_t)({})", e),
+                    Ty::Any => format!("still_any_to_int({}, __FILE__, __LINE__)", e),
                     _ => "0".into(),
                 }
             }
@@ -2897,6 +3090,7 @@ impl Emitter {
                     Ty::Int => format!("(double)({})", e),
                     Ty::Str => format!("still_str_to_float({}, __FILE__, __LINE__)", e),
                     Ty::Bool => format!("(double)({})", e),
+                    Ty::Any => format!("still_any_to_float({}, __FILE__, __LINE__)", e),
                     _ => "0.0".into(),
                 }
             }
@@ -3076,6 +3270,15 @@ impl Emitter {
                     _ => "unknown".to_string(),
                 };
                 let e = self.emit_expr(&args[0]);
+                if matches!(resolve_deep(&args[0].ty), Ty::Any) {
+                    // the type name of an `any` value is only known at runtime
+                    let t = self.newtmp();
+                    self.line(format!("const char* {} = still_any_typename({});", t, e));
+                    let t2 = self.newtmp();
+                    self.line(format!("still_str* {} = still_str_new({}, strlen({}));", t2, t, t));
+                    self.reg_temp(&t2, Ty::Str);
+                    return t2;
+                }
                 if !e.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '>' || c == '-') || e.contains('(') {
                     self.line(format!("(void)({});", e));
                 }

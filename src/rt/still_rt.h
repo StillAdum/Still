@@ -463,3 +463,46 @@ void still_sb_add_str(still_sb* sb, still_str* v);
 void still_sb_add_none(still_sb* sb);
 void still_tostr_add_soa_stub(still_sb* sb, void* p);
 typedef struct { still_hdr hdr; int64_t len; } still_soa_hdr;
+
+// ===================== any =====================
+// A heap-boxed tagged union that can hold int, float, bool, str, list, dict
+// or none. The tag is a packed byte string, least-significant byte first:
+//   'i' 'f' 'b' 's' 'n'  -> scalar / none (one byte)
+//   'a'                  -> element slot holding another any cell (pointer)
+//   'l' + child bytes    -> a list whose element type is `child`
+//   'd' + key bytes + value bytes -> a dict (children parsed greedily)
+// Lists/dicts of scalars keep the elements inline in the list slots; lists
+// of str/list/dict/any hold rc'd pointers.
+typedef struct still_any {
+    still_hdr hdr;
+    int64_t tag;
+    union { int64_t i; double f; void* p; } u;
+} still_any;
+
+still_any* still_any_none(void);
+still_any* still_any_new_i(int64_t v);
+still_any* still_any_new_f(double v);
+still_any* still_any_new_b(int64_t v);
+still_any* still_any_new_s(still_str* s);
+still_any* still_any_new_p(void* p, int64_t tag);
+int still_any_truth(still_any* a);
+int still_any_eq(still_any* a, still_any* b);
+int still_any_cmp(int op, still_any* a, still_any* b);
+still_any* still_any_binop(int op, still_any* a, still_any* b);
+still_any* still_any_index_i(still_any* a, int64_t i);
+still_any* still_any_index_s(still_any* a, still_str* k);
+int still_any_in(still_any* item, still_any* cont);
+int still_any_in_typed(int64_t ctag, void* cont, still_any* item);
+int64_t still_any_len(still_any* a);
+int64_t still_any_to_int(still_any* a, const char* file, int64_t line);
+double still_any_to_float(still_any* a, const char* file, int64_t line);
+const char* still_any_typename(still_any* a);
+still_str* still_any_tostr(still_any* a);
+still_str* still_any_repr(still_any* a);
+void still_print_any(still_any* a);
+uint64_t still_hash_a(still_any* a);
+void still_tostr_add_a(still_sb* sb, still_any* a);
+
+// String append that reuses the buffer when the target has refcount 1,
+// so `s += t` in a loop stays linear instead of quadratic.
+void still_str_append_inplace(still_str** slot, still_str* add);

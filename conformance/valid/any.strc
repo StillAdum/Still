@@ -1,0 +1,90 @@
+# heterogeneous lists and dicts widen to [any] and {str: any}
+xs = [1, "one", 2.5, true, none]
+print(xs)
+print(len(xs))
+print(xs[1])
+print(xs[2] + 0.5)
+print(type_of(xs))
+print(type_of(xs[0]))
+
+d = {"a": 1, "b": "two", "c": 2.5}
+print(d)
+print(len(d))
+print(d["b"])
+print(d["c"] * 2)
+print(type_of(d))
+
+# an `any` variable can hold any boxable value and change type
+x: any = 42
+print(x, type_of(x))
+x = "hi"
+print(x, type_of(x))
+x = 2.5
+print(x, type_of(x))
+x = true
+print(x, type_of(x))
+x = none
+print(x, type_of(x))
+print(x is none)
+
+# arithmetic and comparisons dispatch on the runtime type
+a: any = 6
+b: any = 7
+print(a + b, a * b)
+a = 2.0
+print(a / 4, a // 2)
+print(a == 2, a == 2.0, a < 3)
+p: any = 5
+q: any = 5.0
+print(p == q, p != q)
+
+# casts look through the runtime type
+s: any = "42"
+print(int(s) + 1)
+print(float(s) * 2)
+s = 3.9
+print(int(s))
+
+# iteration works over [any] lists and `any` values alike
+for v in xs:
+    print(v)
+for i, v in enumerate(xs):
+    print(i, v)
+c: any = [1, 2, 3]
+for v in c:
+    print(v)
+for j, v in c:
+    print(j, v)
+
+# membership and truthiness
+print("one" in xs)
+print(9 in xs)
+print(99 not in xs)
+print(2 in c)
+print("x" not in c)
+e: any = ""
+if e:
+    print("no")
+else:
+    print("empty ok")
+z: any = "yes"
+if z:
+    print("truthy ok")
+
+# match accepts int and str patterns over an any subject
+m: any = "hi"
+match m:
+    case 1:
+        print("one")
+    case "hi":
+        print("greeting")
+    case _:
+        print("other")
+m = 2
+match m:
+    case 1, 2, 3:
+        print("small")
+    case _:
+        print("big")
+
+print("done")
