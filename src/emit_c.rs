@@ -251,11 +251,19 @@ impl Emitter {
     }
 
     fn bp(&mut self, span: &Span) {
-        self.set_line(span);
-        if self.debug {
-            self.line("still_bp_check(__FILE__, __LINE__);".into());
-            self.last_line += 1;
+        if !self.debug {
+            self.set_line(span);
+            return;
         }
+        // The check must report the statement's own line even if the
+        // last_line tracker has drifted between statements, so write the
+        // #line directive unconditionally here instead of trusting
+        // set_line's change detection.
+        let f = span.file.to_string();
+        self.raw(&format!("#line {} \"{}\"", span.line, f.replace('\\', "\\\\")));
+        self.line("still_bp_check(__FILE__, __LINE__);".into());
+        self.last_line = span.line + 1;
+        self.last_file = f;
     }
 
     fn newtmp(&mut self) -> String {

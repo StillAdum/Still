@@ -756,16 +756,26 @@ static void still_bp_init(void) {
     still_bp_any = still_bp_count > 0;
 }
 
+/* Match an env entry against the reported __FILE__: exact, or the report
+ * ends with the entry at a path boundary (the compiler prefixes the build
+ * directory to #line file names, and basename entries must not match
+ * longer names like "xpanic_line.strc"). */
+static int still_bp_file_eq(const char* envf, const char* file) {
+    if (strcmp(envf, file) == 0) return 1;
+    size_t elen = strlen(envf);
+    size_t flen = strlen(file);
+    if (elen == 0 || elen > flen) return 0;
+    const char* tail = file + (flen - elen);
+    if (strcmp(tail, envf) != 0) return 0;
+    if (tail == file) return 1;
+    char prev = tail[-1];
+    return prev == '/' || prev == '\\';
+}
+
 void still_bp_check(const char* file, int64_t line) {
     if (!still_bp_any) return;
-    const char* base = strrchr(file, '/');
-#ifdef _WIN32
-    const char* base2 = strrchr(file, '\\');
-    if (base2 > base) base = base2;
-#endif
-    if (base) base++; else base = file;
     for (int i = 0; i < still_bp_count; i++) {
-        if (still_bp_lines[i] == line && (strcmp(still_bp_files[i], file) == 0 || strcmp(still_bp_files[i], base) == 0)) {
+        if (still_bp_lines[i] == line && still_bp_file_eq(still_bp_files[i], file)) {
             fflush(stdout);
             fprintf(stderr, "breakpoint hit at %s:%lld\n", file, (long long)line);
 #ifdef _WIN32
