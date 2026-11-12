@@ -1,1 +1,1 @@
-match subject must be int or str
+match subject must be int, str or any
