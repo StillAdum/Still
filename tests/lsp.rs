@@ -115,6 +115,39 @@ fn lsp_full_session() {
     assert!(comp.contains("func"), "keywords in completion: {}", comp);
     assert!(comp.contains("greet"), "file symbols in completion: {}", comp);
 
+    // Find references of `x` (cursor on the `x` of `greet(x)`, 0-based
+    // char 12): the declaration on line 0 and this use on line 3.
+    s.send(
+        r#"{"jsonrpc":"2.0","id":5,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc"},"position":{"line":3,"character":12},"context":{"includeDeclaration":true}}}"#,
+    );
+    let refs = s.recv("references response");
+    assert!(refs.contains("\"character\":0"), "decl occurrence in refs: {}", refs);
+    assert!(refs.contains("\"character\":12"), "use occurrence in refs: {}", refs);
+    assert!(refs.contains("lsp_demo.strc"), "refs carry the uri: {}", refs);
+
+    // includeDeclaration=false keeps only the use site.
+    s.send(
+        r#"{"jsonrpc":"2.0","id":6,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc"},"position":{"line":3,"character":12},"context":{"includeDeclaration":false}}}"#,
+    );
+    let refs2 = s.recv("references response without decl");
+    assert!(refs2.contains("\"character\":12"), "use site kept: {}", refs2);
+    assert!(!refs2.contains("\"character\":0"), "decl occurrence dropped: {}", refs2);
+
+    // Rename `x` to `total`: a workspace edit touching both occurrences.
+    s.send(
+        r#"{"jsonrpc":"2.0","id":7,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc"},"position":{"line":3,"character":12},"newName":"total"}}"#,
+    );
+    let ren = s.recv("rename response");
+    assert!(ren.contains("changes"), "rename edit: {}", ren);
+    assert!(ren.contains("\"newText\":\"total\""), "rename text: {}", ren);
+
+    // An invalid new name reports an error instead of an edit.
+    s.send(
+        r#"{"jsonrpc":"2.0","id":8,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc"},"position":{"line":3,"character":12},"newName":"9bad"}}"#,
+    );
+    let ren_err = s.recv("rename error response");
+    assert!(ren_err.contains("invalid new name"), "rename err: {}", ren_err);
+
     // Fix the file via didChange (full sync): diagnostics should clear.
     s.send(
         r#"{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/lsp_demo.strc","version":2},"contentChanges":[{"text":"x = 1\ny = 2\nprint(x + y)\n"}]}}"#,
@@ -124,11 +157,11 @@ fn lsp_full_session() {
     assert!(pub2.contains("[]"), "diagnostics should be empty after fix: {}", pub2);
 
     // Unknown request gets a MethodNotFound error, server keeps going.
-    s.send(r#"{"jsonrpc":"2.0","id":5,"method":"textDocument/whatever","params":{}}"#);
+    s.send(r#"{"jsonrpc":"2.0","id":9,"method":"textDocument/whatever","params":{}}"#);
     let err = s.recv("method-not-found response");
     assert!(err.contains("-32601"), "err: {}", err);
 
-    s.send(r#"{"jsonrpc":"2.0","id":6,"method":"shutdown","params":null}"#);
+    s.send(r#"{"jsonrpc":"2.0","id":10,"method":"shutdown","params":null}"#);
     let sd = s.recv("shutdown response");
     assert!(sd.contains("\"result\":null"), "shutdown: {}", sd);
     s.send(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);

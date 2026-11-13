@@ -5,11 +5,13 @@
 //! the same diagnostics/symbols/completion the VSCode extension has, without
 //! needing a client-side plugin.
 //!
-//! Scope (v0.3, honest): full-sync text documents, publishDiagnostics on
+//! Scope (v0.4, honest): full-sync text documents, publishDiagnostics on
 //! open/change/close, documentSymbol, hover for known top-level symbols,
-//! completion (keywords + file symbols). No formatting, no rename, no
-//! cross-file references yet.
+//! completion (keywords + file symbols), find-references and rename over the
+//! document's identifier tokens (real lexer, so string literals and comments
+//! never match). No formatting, no cross-file indexing yet.
 
+use crate::lexer::Tok;
 use crate::span::{Diag, Span};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -466,6 +468,57 @@ fn hover_markdown(kind: &str, name: &str, detail: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------- references/rename
+
+/// All identifier-token occurrences of `word` in the source, as 1-based
+/// (line, col) starts. Tokenizing with the real lexer keeps matches out of
+/// string literals and comments; keywords never produce Ident tokens, so
+/// `true`/`none` can't be renamed.
+fn ident_occurrences(text: &str, word: &str) -> Vec<(u32, u32)> {
+    let norm = text.strip_prefix('\u{feff}').unwrap_or(text).replace("\r\n", "\n");
+    let (toks, _) = crate::lexer::Lexer::new(&norm, "doc").run();
+    let mut out = Vec::new();
+    for t in toks {
+        if let Tok::Ident(n) = &t.tok {
+            if n == word {
+                out.push((t.span.line, t.span.col));
+            }
+        }
+    }
+    out
+}
+
+/// The first occurrence doubles as the declaration for file-level names
+/// (funcs, types, top-level vars, params are all written before their
+/// uses), so includeDeclaration=false drops exactly that one.
+fn reference_locations(text: &str, uri: &str, word: &str, include_decl: bool) -> Vec<J> {
+    if word.is_empty() {
+        return Vec::new();
+    }
+    ident_occurrences(text, word)
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| include_decl || *i > 0)
+        .map(|(_, (l, c))| {
+            J::Obj(vec![
+                ("uri".into(), jstr(uri)),
+                ("range".into(), range_json(text, l, c)),
+            ])
+        })
+        .collect()
+}
+
+/// A valid Still identifier: letters/digits/underscore, not starting with
+/// a digit.
+fn is_ident_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_alphanumeric() || c == '_')
+}
+
 // ---------------------------------------------------------------- server
 
 struct Doc {
@@ -522,6 +575,8 @@ pub fn serve() -> i32 {
                     ("textDocumentSync".into(), jnum(1)), // full sync
                     ("documentSymbolProvider".into(), J::Bool(true)),
                     ("hoverProvider".into(), J::Bool(true)),
+                    ("referencesProvider".into(), J::Bool(true)),
+                    ("renameProvider".into(), J::Bool(true)),
                     (
                         "completionProvider".into(),
                         J::Obj(vec![("triggerCharacters".into(), J::Arr(vec![jstr(".")]))]),
@@ -640,6 +695,61 @@ pub fn serve() -> i32 {
                     ]));
                 }
                 send(&mut wout, id.unwrap_or(J::Null), &J::Obj(vec![("isIncomplete".into(), J::Bool(false)), ("items".into(), J::Arr(items))]));
+            }
+            "textDocument/references" => {
+                let uri = params
+                    .get("textDocument")
+                    .and_then(|t| t.get("uri"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("");
+                let pos = params.get("position").cloned().unwrap_or(J::Null);
+                let line0 = pos.get("line").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                let ch0 = pos.get("character").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                let include_decl = params
+                    .get("context")
+                    .and_then(|c| c.get("includeDeclaration"))
+                    .map(|v| matches!(v, J::Bool(true)))
+                    .unwrap_or(true);
+                let text = docs.get(uri).map(|d| d.text.clone()).unwrap_or_default();
+                let word = word_at(&text, line0, ch0);
+                let locs = reference_locations(&text, uri, &word, include_decl);
+                send(&mut wout, id.unwrap_or(J::Null), &J::Arr(locs));
+            }
+            "textDocument/rename" => {
+                let uri = params
+                    .get("textDocument")
+                    .and_then(|t| t.get("uri"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("");
+                let pos = params.get("position").cloned().unwrap_or(J::Null);
+                let line0 = pos.get("line").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                let ch0 = pos.get("character").and_then(|v| v.as_f64()).unwrap_or(0.0) as u32;
+                let new_name = params.get("newName").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let text = docs.get(uri).map(|d| d.text.clone()).unwrap_or_default();
+                let word = word_at(&text, line0, ch0);
+                if word.is_empty() {
+                    send(&mut wout, id.unwrap_or(J::Null), &J::Null);
+                } else if !is_ident_name(&new_name) {
+                    send_error(&mut wout, id.unwrap_or(J::Null), 3, "invalid new name: use letters, digits and _");
+                } else {
+                    let edits: Vec<J> = ident_occurrences(&text, &word)
+                        .into_iter()
+                        .map(|(l, c)| {
+                            J::Obj(vec![
+                                ("range".into(), range_json(&text, l, c)),
+                                ("newText".into(), jstr(&new_name)),
+                            ])
+                        })
+                        .collect();
+                    send(
+                        &mut wout,
+                        id.unwrap_or(J::Null),
+                        &J::Obj(vec![(
+                            "changes".into(),
+                            J::Obj(vec![(uri.to_string(), J::Arr(edits))]),
+                        )]),
+                    );
+                }
             }
             other => {
                 if wants_reply {
