@@ -2771,8 +2771,9 @@ impl Checker {
                     if conds.is_empty() {
                         // Unconditional arm (e.g. a tuple pattern with only
                         // binders): it always matches, so the remaining
-                        // arms are unreachable.
-                        cur = body;
+                        // arms are unreachable. It still runs inside its
+                        // own branch scope so its binders stay arm-local.
+                        cur = vec![Stmt::If { arms: vec![(Expr::BoolLit(true, span.clone()), body)], else_body: None, span }];
                         continue;
                     }
                     let mut node: Option<Stmt> = None;
