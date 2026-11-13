@@ -173,6 +173,8 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
             } else {
                 line.push_str(" /Od /Zi /DSTIL_DEBUG");
             }
+            // GUI-capable by default, same as the tcc/gcc branches.
+            line.push_str(" /link user32.lib gdi32.lib");
             line.push_str("\r\n");
             std::fs::write(&bat, line).map_err(|e| format!("failed to write build script: {}", e))?;
             Command::new("cmd").args(["/C", &bat.display().to_string()]).output()
@@ -189,6 +191,7 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
             } else {
                 cmd.arg("/Od").arg("/Zi").arg("/DSTIL_DEBUG");
             }
+            cmd.arg("/link").arg("user32.lib").arg("gdi32.lib");
             cmd.current_dir(include_dir).output()
         };
         let out_res = out_res.map_err(|e| format!("failed to run cl: {}", e))?;
@@ -209,7 +212,13 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
         cmd.arg(format!("-I{}", include_dir.display()))
             .arg("-D_FILE_OFFSET_BITS=64");
         cmd.arg(c_file).arg(rt_c).arg("-o").arg(&out_abs);
-        if !cfg!(windows) {
+        if cfg!(windows) {
+            // Link the Windows GUI libraries by default so `extern "C"`
+            // window/input programs work out of the box (user32/gdi32 are
+            // in every tcc distribution's import set; linking them into
+            // console programs costs nothing).
+            cmd.arg("-luser32").arg("-lgdi32");
+        } else {
             cmd.arg("-lm");
         }
         let out_res = cmd.output().map_err(|e| format!("failed to run {}: {}", tc.program.display(), e))?;
@@ -233,7 +242,10 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
         cmd.arg("-DSTIL_DEBUG");
     }
     cmd.arg(c_file).arg(rt_c).arg("-o").arg(&out_abs);
-    if !cfg!(windows) {
+    if cfg!(windows) {
+        // Same rationale as the tcc branch: GUI-capable by default.
+        cmd.arg("-luser32").arg("-lgdi32");
+    } else {
         cmd.arg("-lm").arg("-flto");
     }
     let out_res = cmd.output().map_err(|e| format!("failed to run {}: {}", tc.program.display(), e))?;
