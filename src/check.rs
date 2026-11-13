@@ -2682,7 +2682,14 @@ impl Checker {
             self.diags.push(err(span, format!("match subject must be int, str, any, tuple or list, not {}", ty_name(&sty.ty))));
             return None;
         }
-        let mut if_arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
+        enum ArmLower {
+            /// Scalar literal arm: one `subject in [values]` condition.
+            Value { cond: Expr, body: Vec<Stmt>, span: Span },
+            /// Tuple/list pattern arm: length/element tests whose innermost
+            /// body binds the pattern's names and runs the arm body.
+            Tower { conds: Vec<Expr>, body: Vec<Stmt>, span: Span },
+        }
+        let mut lowered_arms: Vec<ArmLower> = Vec::new();
         let mut else_body: Option<Vec<Stmt>> = None;
         let mut seen: HashSet<String> = HashSet::new();
         let mut wildcard_seen = false;
@@ -2741,20 +2748,57 @@ impl Checker {
             }
             if let Some(pat) = binding {
                 let is_tuple = matches!(pat, Expr::Tuple(..));
-                let (body, names) = self.lower_binding_arm(ctx, &subj_name, &sres, pat, is_tuple, arm)?;
+                let (conds, body, names) = self.lower_binding_arm(ctx, &subj_name, &sres, pat, is_tuple, arm)?;
                 binder_names.extend(names);
-                if_arms.push((Expr::BoolLit(true, arm.span.clone()), body));
+                lowered_arms.push(ArmLower::Tower { conds, body, span: arm.span.clone() });
             } else {
                 let list = Expr::ListLit(value_pats, arm.span.clone());
                 let cond = Expr::In(Box::new(subject.clone()), Box::new(list), false, arm.span.clone());
-                if_arms.push((cond, arm.body.clone()));
+                lowered_arms.push(ArmLower::Value { cond, body: arm.body.clone(), span: arm.span.clone() });
             }
         }
-        let lowered = Stmt::If { arms: if_arms, else_body, span: span.clone() };
+        // Fold the arms into one nested if-chain, last arm first: every
+        // arm carries the remaining chain in the else branch of each of
+        // its tests, so a failed test at any level (scalar cond or tower
+        // level) falls through to the next arm and finally to `_`.
+        let mut cur: Vec<Stmt> = else_body.clone().unwrap_or_default();
+        for arm in lowered_arms.into_iter().rev() {
+            match arm {
+                ArmLower::Value { cond, body, span } => {
+                    cur = vec![Stmt::If { arms: vec![(cond, body)], else_body: Some(cur), span }];
+                }
+                ArmLower::Tower { conds, body, span } => {
+                    if conds.is_empty() {
+                        // Unconditional arm (e.g. a tuple pattern with only
+                        // binders): it always matches, so the remaining
+                        // arms are unreachable.
+                        cur = body;
+                        continue;
+                    }
+                    let mut node: Option<Stmt> = None;
+                    for c in conds.into_iter().rev() {
+                        let then_branch = match node.take() {
+                            Some(prev) => vec![prev],
+                            None => body.clone(),
+                        };
+                        node = Some(Stmt::If { arms: vec![(c, then_branch)], else_body: Some(cur.clone()), span: span.clone() });
+                    }
+                    if let Some(n) = node {
+                        cur = vec![n];
+                    }
+                }
+            }
+        }
         // The binder set is active only while the lowered arms are checked;
         // a nested match swaps in its own set and restores this one.
         let saved_binders = std::mem::replace(&mut ctx.pat_binders, binder_names);
-        let checked = self.check_stmt(ctx, &lowered, out);
+        let mut checked = Some(());
+        for st in &cur {
+            if self.check_stmt(ctx, st, out).is_none() {
+                checked = None;
+                break;
+            }
+        }
         ctx.pat_binders = saved_binders;
         checked
     }
@@ -2780,13 +2824,12 @@ impl Checker {
         }
     }
 
-    /// Lower one binding arm: validate the subject shape, walk the pattern
-    /// into conditions and binder assignments, and wrap everything in a
-    /// tower of nested ifs so a failed inner test falls through to the next
-    /// arm. Binder assignments run at the innermost level, before the arm
-    /// body, inside the arm's own scope. Returns the tower and the binder
-    /// names it declares (declared as arm-locals by check_assign's
-    /// pattern-binder path, never as module globals).
+    /// Lower one binding arm: validate the subject shape and walk the
+    /// pattern into test conditions (outermost first) and binder
+    /// assignments. The caller wraps the conditions into the nested-if
+    /// tower whose innermost body is `body` (binders, then the arm body).
+    /// Binder names are declared as arm-locals by check_assign's
+    /// pattern-binder path, never as module globals.
     fn lower_binding_arm(
         &mut self,
         ctx: &mut Ctx,
@@ -2795,7 +2838,7 @@ impl Checker {
         pat: &Expr,
         is_tuple: bool,
         arm: &MatchCase,
-    ) -> Option<(Vec<Stmt>, Vec<String>)> {
+    ) -> Option<(Vec<Expr>, Vec<Stmt>, Vec<String>)> {
         let items = match pat {
             Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => xs,
             _ => return None,
@@ -2833,10 +2876,7 @@ impl Checker {
         }).collect();
         let mut body = binds;
         body.extend(arm.body.iter().cloned());
-        for c in conds.into_iter().rev() {
-            body = vec![Stmt::If { arms: vec![(c, body)], else_body: None, span: arm.span.clone() }];
-        }
-        Some((body, names))
+        Some((conds, body, names))
     }
 
     /// Walk one pattern level against its container type, appending tests to
