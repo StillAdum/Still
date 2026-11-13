@@ -29,6 +29,10 @@ struct Ctx {
     in_fn: bool,
     depth: u32,
     global_names: HashSet<String>,
+    /// Names bound by the current match statement's binding patterns. Fresh
+    /// binder names declare arm-locals even at top level, where ordinary
+    /// fresh assignments become module globals.
+    pat_binders: HashSet<String>,
 }
 
 impl Ctx {
@@ -46,6 +50,7 @@ impl Ctx {
             in_fn,
             depth: 0,
             global_names: HashSet::new(),
+            pat_binders: HashSet::new(),
         }
     }
 
@@ -2645,13 +2650,14 @@ impl Checker {
     }
 
     /// Validate a match statement and lower it to an equivalent if/elif
-    /// chain. Literal arms (and all-literal tuple/list patterns) lower to
-    /// `subject in [values]`, reusing check_if and the existing X::In emit
-    /// path. Tuple/list patterns that bind names lower to a tower of nested
-    /// ifs (element and length tests) followed by element assignments, so
-    /// binding arms reuse the ordinary Assign machinery. A `_` arm becomes
-    /// the else branch; with no `_` arm, non-matching subjects fall through
-    /// (Python rule).
+    /// chain. Scalar literal arms lower to `subject in [values]`, reusing
+    /// check_if and the existing X::In emit path. Tuple/list patterns —
+    /// binding or all-literal — lower to a tower of nested ifs (length and
+    /// element tests, outermost first) whose innermost body binds the
+    /// pattern's names and then runs the arm body, so a failed inner test
+    /// falls through to the next arm and binders reuse the ordinary Assign
+    /// machinery as arm-locals. A `_` arm becomes the else branch; with no
+    /// `_` arm, non-matching subjects fall through (Python rule).
     fn check_match(
         &mut self,
         ctx: &mut Ctx,
@@ -2680,6 +2686,7 @@ impl Checker {
         let mut else_body: Option<Vec<Stmt>> = None;
         let mut seen: HashSet<String> = HashSet::new();
         let mut wildcard_seen = false;
+        let mut binder_names: HashSet<String> = HashSet::new();
         for arm in arms {
             if wildcard_seen {
                 self.diags.push(err(&arm.span, "'_' must be the last case arm".into()));
@@ -2691,7 +2698,7 @@ impl Checker {
                 continue;
             }
             let mut value_pats: Vec<Expr> = Vec::new();
-            let mut binding: Option<(&Expr, bool)> = None;
+            let mut binding: Option<&Expr> = None;
             for v in &arm.values {
                 match v {
                     Expr::IntLit(n, vsp) => {
@@ -2710,33 +2717,17 @@ impl Checker {
                         }
                         value_pats.push(v.clone());
                     }
-                    Expr::Tuple(items, _) | Expr::ListLit(items, _) => {
-                        let is_tuple = matches!(v, Expr::Tuple(..));
-                        if Self::pat_has_binder(items) {
-                            if binding.is_some() {
-                                self.diags.push(err(&arm.span, "a case arm with a binding pattern must contain exactly one pattern".into()));
-                                return None;
-                            }
-                            binding = Some((v, is_tuple));
-                        } else {
-                            let ok = match (&sres, is_tuple) {
-                                (Ty::Tuple(_), true) | (Ty::List(_), false) => true,
-                                _ => false,
-                            };
-                            if !ok {
-                                self.diags.push(err(&v.span(), if is_tuple {
-                                    format!("tuple case value needs a tuple subject, not {}", ty_name(&sres))
-                                } else {
-                                    format!("list case value needs a list subject, not {}", ty_name(&sres))
-                                }));
-                                return None;
-                            }
-                            if !seen.insert(self.pat_lit_key(v, &v.span())) {
-                                self.diags.push(err(&v.span(), "duplicate case value".into()));
-                                return None;
-                            }
-                            value_pats.push(v.clone());
+                    Expr::Tuple(..) | Expr::ListLit(..) => {
+                        // Tuple/list patterns always go through the binding
+                        // tower, literals or not: the runtime has no
+                        // list-of-container representation, so the `in`
+                        // lowering can't compare whole containers, and a `_`
+                        // mixed with literals must not leak into it either.
+                        if binding.is_some() || !value_pats.is_empty() {
+                            self.diags.push(err(&arm.span, "a case arm with a binding pattern must contain exactly one pattern".into()));
+                            return None;
                         }
+                        binding = Some(v);
                     }
                     _ => {
                         self.diags.push(err(&v.span(), "case patterns must be int or str literals, or (…) / […] patterns".into()));
@@ -2748,8 +2739,10 @@ impl Checker {
                 self.diags.push(err(&arm.span, "a case arm with a binding pattern must contain exactly one pattern".into()));
                 return None;
             }
-            if let Some((pat, is_tuple)) = binding {
-                let body = self.lower_binding_arm(ctx, &subj_name, &sres, pat, is_tuple, arm)?;
+            if let Some(pat) = binding {
+                let is_tuple = matches!(pat, Expr::Tuple(..));
+                let (body, names) = self.lower_binding_arm(ctx, &subj_name, &sres, pat, is_tuple, arm)?;
+                binder_names.extend(names);
                 if_arms.push((Expr::BoolLit(true, arm.span.clone()), body));
             } else {
                 let list = Expr::ListLit(value_pats, arm.span.clone());
@@ -2758,35 +2751,12 @@ impl Checker {
             }
         }
         let lowered = Stmt::If { arms: if_arms, else_body, span: span.clone() };
-        self.check_stmt(ctx, &lowered, out)
-    }
-
-    /// A pattern element binds when it is a plain identifier (not `_` or a
-    /// literal keyword); any nested pattern counts through recursion.
-    fn pat_has_binder(items: &[Expr]) -> bool {
-        items.iter().any(|e| match e {
-            Expr::Ident(n, _) => !matches!(n.as_str(), "_" | "true" | "false"),
-            Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => Self::pat_has_binder(xs),
-            _ => false,
-        })
-    }
-
-    fn pat_lit_key(&self, e: &Expr, _sp: &Span) -> String {
-        match e {
-            Expr::IntLit(n, _) => format!("i:{}", n),
-            Expr::FloatLit(v, _) => format!("f:{}", v),
-            Expr::BoolLit(b, _) => format!("b:{}", b),
-            Expr::StrLit(s, _) => format!("s:{}", s),
-            Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => {
-                let parts: Vec<String> = xs.iter().map(|x| self.pat_lit_key(x, _sp)).collect();
-                if matches!(e, Expr::Tuple(..)) {
-                    format!("t({})", parts.join(","))
-                } else {
-                    format!("l[{}]", parts.join(","))
-                }
-            }
-            _ => "?".into(),
-        }
+        // The binder set is active only while the lowered arms are checked;
+        // a nested match swaps in its own set and restores this one.
+        let saved_binders = std::mem::replace(&mut ctx.pat_binders, binder_names);
+        let checked = self.check_stmt(ctx, &lowered, out);
+        ctx.pat_binders = saved_binders;
+        checked
     }
 
     /// Gate an int/str case value against the subject type.
@@ -2814,7 +2784,9 @@ impl Checker {
     /// into conditions and binder assignments, and wrap everything in a
     /// tower of nested ifs so a failed inner test falls through to the next
     /// arm. Binder assignments run at the innermost level, before the arm
-    /// body, inside the arm's own scope.
+    /// body, inside the arm's own scope. Returns the tower and the binder
+    /// names it declares (declared as arm-locals by check_assign's
+    /// pattern-binder path, never as module globals).
     fn lower_binding_arm(
         &mut self,
         ctx: &mut Ctx,
@@ -2823,7 +2795,7 @@ impl Checker {
         pat: &Expr,
         is_tuple: bool,
         arm: &MatchCase,
-    ) -> Option<Vec<Stmt>> {
+    ) -> Option<(Vec<Stmt>, Vec<String>)> {
         let items = match pat {
             Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => xs,
             _ => return None,
@@ -2852,12 +2824,19 @@ impl Checker {
         let mut conds: Vec<Expr> = Vec::new();
         let mut binds: Vec<Stmt> = Vec::new();
         self.pat_walk(&path, sres, items, &arm.span, &mut conds, &mut binds)?;
+        let names: Vec<String> = binds.iter().filter_map(|s| match s {
+            Stmt::Assign { targets, .. } if targets.len() == 1 => match &targets[0] {
+                Expr::Ident(n, _) => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
         let mut body = binds;
         body.extend(arm.body.iter().cloned());
         for c in conds.into_iter().rev() {
             body = vec![Stmt::If { arms: vec![(c, body)], else_body: None, span: arm.span.clone() }];
         }
-        Some(body)
+        Some((body, names))
     }
 
     /// Walk one pattern level against its container type, appending tests to
@@ -3297,7 +3276,11 @@ impl Checker {
                 } else {
                     vt.ty.clone()
                 };
-                if ctx.in_fn {
+                if ctx.in_fn || ctx.pat_binders.contains(name.as_str()) {
+                    // Pattern binders are fresh locals in the arm's own scope
+                    // even at top level, so two arms binding the same name
+                    // don't collide through a module global (top-level plain
+                    // assignments still become globals).
                     let id = ctx.declare(name, ty.clone());
                     out.push(CS::Decl { local: id, name: name.clone(), ty, value: Some(vt) });
                 } else {
