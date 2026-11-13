@@ -1199,6 +1199,14 @@ static void any_dict_geo(int64_t tag, int64_t* stride, int64_t* koff, int64_t* v
 
 static int64_t any_stride_of(int64_t ctag) { return ((ctag & 0xFF) == 'b') ? 1 : 8; }
 
+// Forward declarations for the mutually recursive equality/ordering/hashing
+// walkers below (container forms recurse back through the cell comparators).
+// C99 has no implicit function declarations; strict gcc and MSVC reject
+// use-before-define, so these must exist even though tcc tolerates it.
+static int any_raw_eq(int64_t tag, void* p, void* q);
+static int any_raw_cmp(int64_t tag, void* p, void* q);
+static uint64_t any_hash_raw(int64_t tag, void* p);
+
 // ---- equality ----
 
 static int any_cmp_eq(int64_t ctag, void* b1, int64_t st1, int64_t o1, int64_t i1,
