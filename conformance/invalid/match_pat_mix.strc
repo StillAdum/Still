@@ -1,0 +1,4 @@
+p = (1, 2)
+match p:
+    case (a, b), (1, 2):
+        print(a)

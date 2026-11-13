@@ -1,0 +1,85 @@
+p = (3, "hi")
+match p:
+    case (a, b):
+        print(a, b)
+
+match p:
+    case (0, b):
+        print("zero")
+    case (3, "hi"):
+        print("three hi")
+    case _:
+        print("other")
+
+match p:
+    case (x, "no"):
+        print("no")
+    case (x, "hi"):
+        print("greeting", x)
+
+q = (1, (2, 3))
+match q:
+    case (a, (b, c)):
+        print(a, b, c)
+
+match q:
+    case (a, (0, c)):
+        print("zero")
+    case (a, (b, 3)):
+        print("end three", a, b)
+
+pair = (2.5, true)
+match pair:
+    case (f, t):
+        print(f * 2, t)
+
+match pair:
+    case (2.5, t):
+        print("got", t)
+
+neg = (-1, "neg")
+match neg:
+    case (0, s):
+        print("zero")
+    case (-1, "neg"):
+        print("negative one")
+
+xs = [10, 20, 30]
+match xs:
+    case [a, b, c]:
+        print(a, b, c)
+
+match xs:
+    case [a, b]:
+        print("two")
+    case [a, b, c]:
+        print("three", a, b, c)
+
+match xs:
+    case [_, 20, _]:
+        print("middle twenty")
+
+match xs:
+    case [1, 2]:
+        print("one two")
+    case [10, 20, 30]:
+        print("tens")
+
+short = [1, 2]
+match short:
+    case [a, b, c]:
+        print("three")
+    case [a, b]:
+        print("two", a, b)
+
+words = ["ab", "cd"]
+match words:
+    case [w1, w2]:
+        print(w1 + w2)
+
+grid = [[1, 2], [3, 4]]
+match grid:
+    case [[a, b], [c, d]]:
+        print(a, b, c, d)
+
+print("done")

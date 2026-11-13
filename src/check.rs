@@ -2644,10 +2644,14 @@ impl Checker {
         cur.pop()
     }
 
-    /// Validate a match statement and lower it to an equivalent if/elif chain
-    /// whose conditions are `subject in [values]`, reusing check_if and the
-    /// existing X::In emit path. A `_` arm becomes the else branch; with no
-    /// `_` arm, non-matching subjects fall through (Python rule).
+    /// Validate a match statement and lower it to an equivalent if/elif
+    /// chain. Literal arms (and all-literal tuple/list patterns) lower to
+    /// `subject in [values]`, reusing check_if and the existing X::In emit
+    /// path. Tuple/list patterns that bind names lower to a tower of nested
+    /// ifs (element and length tests) followed by element assignments, so
+    /// binding arms reuse the ordinary Assign machinery. A `_` arm becomes
+    /// the else branch; with no `_` arm, non-matching subjects fall through
+    /// (Python rule).
     fn check_match(
         &mut self,
         ctx: &mut Ctx,
@@ -2656,17 +2660,20 @@ impl Checker {
         span: &Span,
         out: &mut Vec<CS>,
     ) -> Option<()> {
-        // Restrict the subject to a plain variable: each lowered `in` condition
+        // Restrict the subject to a plain variable: each lowered condition
         // re-evaluates the subject, and a call subject would run once per arm.
         if !matches!(subject, Expr::Ident(_, _)) {
             self.diags.push(err(span, "match subject must be a plain variable".into()));
             return None;
         }
+        let subj_name = match subject {
+            Expr::Ident(n, _) => n.clone(),
+            _ => String::new(),
+        };
         let sty = self.infer(ctx, subject)?;
-        let subj_is_int = matches!(resolve(&sty.ty), Ty::Int);
-        let subj_is_any = matches!(resolve(&sty.ty), Ty::Any);
-        if !matches!(resolve(&sty.ty), Ty::Int | Ty::Str | Ty::Any) {
-            self.diags.push(err(span, format!("match subject must be int, str or any, not {}", ty_name(&sty.ty))));
+        let sres = resolve(&sty.ty);
+        if !matches!(sres, Ty::Int | Ty::Str | Ty::Any | Ty::Tuple(_) | Ty::List(_)) {
+            self.diags.push(err(span, format!("match subject must be int, str, any, tuple or list, not {}", ty_name(&sty.ty))));
             return None;
         }
         let mut if_arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
@@ -2683,36 +2690,247 @@ impl Checker {
                 else_body = Some(arm.body.clone());
                 continue;
             }
-            let mut pats: Vec<Expr> = Vec::new();
+            let mut value_pats: Vec<Expr> = Vec::new();
+            let mut binding: Option<(&Expr, bool)> = None;
             for v in &arm.values {
-                let (key, is_int_pat, vsp) = match v {
-                    Expr::IntLit(n, vsp) => (format!("i:{}", n), true, vsp),
-                    Expr::StrLit(s, vsp) => (format!("s:{}", s), false, vsp),
+                match v {
+                    Expr::IntLit(n, vsp) => {
+                        self.pat_value_gate(&sres, true, vsp)?;
+                        if !seen.insert(format!("i:{}", n)) {
+                            self.diags.push(err(vsp, "duplicate case value".into()));
+                            return None;
+                        }
+                        value_pats.push(v.clone());
+                    }
+                    Expr::StrLit(s, vsp) => {
+                        self.pat_value_gate(&sres, false, vsp)?;
+                        if !seen.insert(format!("s:{}", s)) {
+                            self.diags.push(err(vsp, "duplicate case value".into()));
+                            return None;
+                        }
+                        value_pats.push(v.clone());
+                    }
+                    Expr::Tuple(items, _) | Expr::ListLit(items, _) => {
+                        let is_tuple = matches!(v, Expr::Tuple(..));
+                        if Self::pat_has_binder(items) {
+                            if binding.is_some() {
+                                self.diags.push(err(&arm.span, "a case arm with a binding pattern must contain exactly one pattern".into()));
+                                return None;
+                            }
+                            binding = Some((v, is_tuple));
+                        } else {
+                            let ok = match (&sres, is_tuple) {
+                                (Ty::Tuple(_), true) | (Ty::List(_), false) => true,
+                                _ => false,
+                            };
+                            if !ok {
+                                self.diags.push(err(&v.span(), if is_tuple {
+                                    format!("tuple case value needs a tuple subject, not {}", ty_name(&sres))
+                                } else {
+                                    format!("list case value needs a list subject, not {}", ty_name(&sres))
+                                }));
+                                return None;
+                            }
+                            if !seen.insert(self.pat_lit_key(v, &v.span())) {
+                                self.diags.push(err(&v.span(), "duplicate case value".into()));
+                                return None;
+                            }
+                            value_pats.push(v.clone());
+                        }
+                    }
                     _ => {
-                        self.diags.push(err(&v.span(), "case patterns must be int or str literals".into()));
+                        self.diags.push(err(&v.span(), "case patterns must be int or str literals, or (…) / […] patterns".into()));
                         return None;
                     }
-                };
-                if !subj_is_any && is_int_pat != subj_is_int {
-                    self.diags.push(err(vsp, if subj_is_int {
-                        "str case value cannot match an int subject".into()
-                    } else {
-                        "int case value cannot match a str subject".into()
-                    }));
-                    return None;
                 }
-                if !seen.insert(key) {
-                    self.diags.push(err(vsp, "duplicate case value".into()));
-                    return None;
-                }
-                pats.push(v.clone());
             }
-            let list = Expr::ListLit(pats, arm.span.clone());
-            let cond = Expr::In(Box::new(subject.clone()), Box::new(list), false, arm.span.clone());
-            if_arms.push((cond, arm.body.clone()));
+            if binding.is_some() && !value_pats.is_empty() {
+                self.diags.push(err(&arm.span, "a case arm with a binding pattern must contain exactly one pattern".into()));
+                return None;
+            }
+            if let Some((pat, is_tuple)) = binding {
+                let body = self.lower_binding_arm(ctx, &subj_name, &sres, pat, is_tuple, arm)?;
+                if_arms.push((Expr::BoolLit(true, arm.span.clone()), body));
+            } else {
+                let list = Expr::ListLit(value_pats, arm.span.clone());
+                let cond = Expr::In(Box::new(subject.clone()), Box::new(list), false, arm.span.clone());
+                if_arms.push((cond, arm.body.clone()));
+            }
         }
         let lowered = Stmt::If { arms: if_arms, else_body, span: span.clone() };
         self.check_stmt(ctx, &lowered, out)
+    }
+
+    /// A pattern element binds when it is a plain identifier (not `_` or a
+    /// literal keyword); any nested pattern counts through recursion.
+    fn pat_has_binder(items: &[Expr]) -> bool {
+        items.iter().any(|e| match e {
+            Expr::Ident(n, _) => !matches!(n.as_str(), "_" | "true" | "false"),
+            Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => Self::pat_has_binder(xs),
+            _ => false,
+        })
+    }
+
+    fn pat_lit_key(&self, e: &Expr, _sp: &Span) -> String {
+        match e {
+            Expr::IntLit(n, _) => format!("i:{}", n),
+            Expr::FloatLit(v, _) => format!("f:{}", v),
+            Expr::BoolLit(b, _) => format!("b:{}", b),
+            Expr::StrLit(s, _) => format!("s:{}", s),
+            Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => {
+                let parts: Vec<String> = xs.iter().map(|x| self.pat_lit_key(x, _sp)).collect();
+                if matches!(e, Expr::Tuple(..)) {
+                    format!("t({})", parts.join(","))
+                } else {
+                    format!("l[{}]", parts.join(","))
+                }
+            }
+            _ => "?".into(),
+        }
+    }
+
+    /// Gate an int/str case value against the subject type.
+    fn pat_value_gate(&mut self, sres: &Ty, is_int: bool, sp: &Span) -> Option<()> {
+        match sres {
+            Ty::Int if is_int => Some(()),
+            Ty::Str if !is_int => Some(()),
+            Ty::Any => Some(()),
+            Ty::Int => {
+                self.diags.push(err(sp, "str case value cannot match an int subject".into()));
+                None
+            }
+            Ty::Str => {
+                self.diags.push(err(sp, "int case value cannot match a str subject".into()));
+                None
+            }
+            other => {
+                self.diags.push(err(sp, format!("int/str case values cannot match a {} subject", ty_name(other))));
+                None
+            }
+        }
+    }
+
+    /// Lower one binding arm: validate the subject shape, walk the pattern
+    /// into conditions and binder assignments, and wrap everything in a
+    /// tower of nested ifs so a failed inner test falls through to the next
+    /// arm. Binder assignments run at the innermost level, before the arm
+    /// body, inside the arm's own scope.
+    fn lower_binding_arm(
+        &mut self,
+        ctx: &mut Ctx,
+        subj_name: &str,
+        sres: &Ty,
+        pat: &Expr,
+        is_tuple: bool,
+        arm: &MatchCase,
+    ) -> Option<Vec<Stmt>> {
+        let items = match pat {
+            Expr::Tuple(xs, _) | Expr::ListLit(xs, _) => xs,
+            _ => return None,
+        };
+        if is_tuple {
+            if !matches!(sres, Ty::Tuple(_)) {
+                self.diags.push(err(&arm.span, format!("tuple pattern needs a tuple subject, not {}", ty_name(sres))));
+                return None;
+            }
+        } else {
+            if !matches!(sres, Ty::List(_)) {
+                self.diags.push(err(&arm.span, format!("list pattern needs a list subject, not {}", ty_name(sres))));
+                return None;
+            }
+            // The lowered arity test calls len(); it must be the built-in.
+            let shadowed = ctx.lookup("len").is_some()
+                || self.funcs.contains_key(&(ctx.module.clone(), "len".to_string()))
+                || self.imports.get(&ctx.module).map(|m| m.contains_key("len")).unwrap_or(false)
+                || self.gmap.contains_key(&(ctx.module.clone(), "len".to_string()));
+            if shadowed {
+                self.diags.push(err(&arm.span, "list patterns need the built-in len; rename your own 'len'".into()));
+                return None;
+            }
+        }
+        let path = Expr::Ident(subj_name.to_string(), arm.span.clone());
+        let mut conds: Vec<Expr> = Vec::new();
+        let mut binds: Vec<Stmt> = Vec::new();
+        self.pat_walk(&path, sres, items, &arm.span, &mut conds, &mut binds)?;
+        let mut body = binds;
+        body.extend(arm.body.iter().cloned());
+        for c in conds.into_iter().rev() {
+            body = vec![Stmt::If { arms: vec![(c, body)], else_body: None, span: arm.span.clone() }];
+        }
+        Some(body)
+    }
+
+    /// Walk one pattern level against its container type, appending tests to
+    /// `conds` (outermost first, so a later test is only reached after every
+    /// earlier one passed) and binder assignments to `binds`.
+    fn pat_walk(&mut self, path: &Expr, cty: &Ty, items: &[Expr], sp: &Span, conds: &mut Vec<Expr>, binds: &mut Vec<Stmt>) -> Option<()> {
+        match cty {
+            Ty::Tuple(ts) => {
+                if ts.len() != items.len() {
+                    self.diags.push(err(sp, format!("tuple pattern has {} elements but the subject tuple has {}", items.len(), ts.len())));
+                    return None;
+                }
+                for (i, it) in items.iter().enumerate() {
+                    let esp = it.span();
+                    let child = Expr::Index(Box::new(path.clone()), Box::new(Expr::IntLit(i as i64, esp.clone())), esp);
+                    self.pat_elem(&child, &resolve_deep(&ts[i]), it, sp, conds, binds)?;
+                }
+            }
+            Ty::List(elem) => {
+                // The runtime arity test comes first: every later test and
+                // binder indexes the subject and is only safe once it passed.
+                conds.push(Expr::Cmp(
+                    Box::new(Expr::Call(
+                        Box::new(Expr::Ident("len".into(), sp.clone())),
+                        vec![path.clone()],
+                        sp.clone(),
+                    )),
+                    CmpOp::Eq,
+                    Box::new(Expr::IntLit(items.len() as i64, sp.clone())),
+                    sp.clone(),
+                ));
+                let et = resolve_deep(elem);
+                for (i, it) in items.iter().enumerate() {
+                    let esp = it.span();
+                    let child = Expr::Index(Box::new(path.clone()), Box::new(Expr::IntLit(i as i64, esp.clone())), esp);
+                    self.pat_elem(&child, &et, it, sp, conds, binds)?;
+                }
+            }
+            _ => {
+                self.diags.push(err(sp, format!("pattern needs a tuple or list subject, not {}", ty_name(cty))));
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    fn pat_elem(&mut self, child: &Expr, cty: &Ty, it: &Expr, sp: &Span, conds: &mut Vec<Expr>, binds: &mut Vec<Stmt>) -> Option<()> {
+        match it {
+            Expr::Ident(n, nsp) => {
+                if n == "_" {
+                    return Some(());
+                }
+                binds.push(Stmt::Assign {
+                    targets: vec![Expr::Ident(n.clone(), nsp.clone())],
+                    op: None,
+                    value: child.clone(),
+                    annot: None,
+                    span: nsp.clone(),
+                });
+                Some(())
+            }
+            Expr::Tuple(sub, _) | Expr::ListLit(sub, _) => {
+                self.pat_walk(child, cty, sub, sp, conds, binds)
+            }
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::BoolLit(..) | Expr::StrLit(..) => {
+                conds.push(Expr::Cmp(Box::new(child.clone()), CmpOp::Eq, Box::new(it.clone()), sp.clone()));
+                Some(())
+            }
+            _ => {
+                self.diags.push(err(&it.span(), "unsupported pattern element".into()));
+                None
+            }
+        }
     }
 
     fn check_for(&mut self, ctx: &mut Ctx, vars: &[String], iter: &Expr, body: &[Stmt], span: &crate::span::Span, out: &mut Vec<CS>) -> Option<()> {

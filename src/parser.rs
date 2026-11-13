@@ -706,6 +706,7 @@ impl Parser {
         match &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok {
             Tok::Int(_) | Tok::Str(_) | Tok::P(crate::lexer::P::Minus) => true,
             Tok::Ident(n) => n == "_",
+            Tok::P(crate::lexer::P::LP) | Tok::P(crate::lexer::P::LB) => true,
             _ => false,
         }
     }
@@ -741,6 +742,14 @@ impl Parser {
                         }
                     }
                 }
+                Tok::P(crate::lexer::P::LP) => {
+                    let items = self.parse_pattern_seq(crate::lexer::P::RP, &t.span)?;
+                    values.push(Expr::Tuple(items, t.span.clone()));
+                }
+                Tok::P(crate::lexer::P::LB) => {
+                    let items = self.parse_pattern_seq(crate::lexer::P::RB, &t.span)?;
+                    values.push(Expr::ListLit(items, t.span.clone()));
+                }
                 other => {
                     self.error(&t.span, format!("expected a literal or '_' in case pattern, found {}", tok_str(&other)));
                     return None;
@@ -763,6 +772,81 @@ impl Parser {
             body,
             span: sp,
         })
+    }
+
+    /// Parse the comma-separated contents of a `(…)` or `[…]` case pattern,
+    /// consuming through the closing bracket.
+    fn parse_pattern_seq(&mut self, close: crate::lexer::P, open_sp: &Span) -> Option<Vec<Expr>> {
+        let mut items = Vec::new();
+        loop {
+            if matches!(&self.cur().tok, Tok::P(p) if *p == close) {
+                self.bump();
+                break;
+            }
+            items.push(self.parse_pattern_el()?);
+            if matches!(self.cur().tok, Tok::P(crate::lexer::P::Comma)) {
+                self.bump();
+                continue;
+            }
+            if matches!(&self.cur().tok, Tok::P(p) if *p == close) {
+                self.bump();
+                break;
+            }
+            self.error(&self.cur().span, "expected ',' or the closing bracket of the pattern".into());
+            return None;
+        }
+        if items.is_empty() {
+            self.error(open_sp, "pattern needs at least one element".into());
+            return None;
+        }
+        Some(items)
+    }
+
+    /// One pattern element: a binding name, `_`, a literal, or a nested
+    /// `(…)` / `[…]` pattern.
+    fn parse_pattern_el(&mut self) -> Option<Expr> {
+        let t = self.bump();
+        match t.tok {
+            Tok::Ident(n) => Some(Expr::Ident(n, t.span.clone())),
+            Tok::Kw(crate::lexer::Kw::True) => Some(Expr::BoolLit(true, t.span.clone())),
+            Tok::Kw(crate::lexer::Kw::False) => Some(Expr::BoolLit(false, t.span.clone())),
+            Tok::Kw(crate::lexer::Kw::None) => {
+                self.error(&t.span, "none is not supported in patterns yet".into());
+                None
+            }
+            Tok::Int(v) => Some(Expr::IntLit(v, t.span.clone())),
+            Tok::Float(v) => Some(Expr::FloatLit(v, t.span.clone())),
+            Tok::Str(parts) => match parts.as_slice() {
+                [StrPart::Lit(s)] => Some(Expr::StrLit(s.clone(), t.span.clone())),
+                _ => {
+                    self.error(&t.span, "case patterns must be plain string literals".into());
+                    None
+                }
+            },
+            Tok::P(crate::lexer::P::Minus) => {
+                let t2 = self.bump();
+                match t2.tok {
+                    Tok::Int(v) => Some(Expr::IntLit(v.wrapping_neg(), t2.span.clone())),
+                    Tok::Float(v) => Some(Expr::FloatLit(-v, t2.span.clone())),
+                    other => {
+                        self.error(&t2.span, format!("expected a number after '-', found {}", tok_str(&other)));
+                        None
+                    }
+                }
+            }
+            Tok::P(crate::lexer::P::LP) => {
+                let items = self.parse_pattern_seq(crate::lexer::P::RP, &t.span)?;
+                Some(Expr::Tuple(items, t.span.clone()))
+            }
+            Tok::P(crate::lexer::P::LB) => {
+                let items = self.parse_pattern_seq(crate::lexer::P::RB, &t.span)?;
+                Some(Expr::ListLit(items, t.span.clone()))
+            }
+            other => {
+                self.error(&t.span, format!("expected a name, literal or nested pattern, found {}", tok_str(&other)));
+                None
+            }
+        }
     }
 
     fn parse_if(&mut self, sp: Span) -> Option<(Stmt, Span)> {
