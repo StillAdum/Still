@@ -1,26 +1,26 @@
-# ROADMAP-STATUS — v0.3.0
+# ROADMAP-STATUS — v0.4.0
 
-Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.3.0, November 2026. Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.
+Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.4.0, November 2026. Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.
 
 ## Verdict in one paragraph
 
-Still v0.3.0 is a working Phase-1–4 language with a real Phase-6 C-ABI hub, a real Phase-7 tooling slice (LSP + DAP + release automation), and a first Phase-6.5 Python bridge. It is **not** a Phase-9/10/11 language: there is no LLVM/Cranelift backend, no DWARF/PDB stepping, no threads, no `core`/`alloc` split, no kernel story, and several stdlib modules are typechecked-only stubs. Those gaps are listed phase by phase below instead of being papered over.
+Still v0.4.0 is a working Phase-1–4 language with a real Phase-6 C-ABI hub, a real Phase-7 tooling slice (LSP + DAP + release automation), and a first Phase-6.5 Python bridge. v0.4 closes the two big v0.3 language gaps it could close honestly: the `any` dynamic value (tagged runtime design, end to end) and real tuple/list `match` destructuring; it also re-verified the whole debug line-info path (panics + breakpoints) and added LSP find-references/rename. It is **not** a Phase-9/10/11 language: there is no LLVM/Cranelift backend, no DWARF/PDB stepping, no threads, no `core`/`alloc` split, no kernel story, and several stdlib modules are typechecked-only stubs. Those gaps are listed phase by phase below instead of being papered over.
 
 ## Phase 1: Front End — ✅ mostly shipped (for the implemented language)
 
-Shipped: hand-written lexer (indentation blocks, `{expr}` interpolation capture, spans), recursive-descent parser with error recovery, AST with spans, diagnostics with did-you-mean, name resolution + modules (`use`, aliases, embedded stdlib), type checker with full inference, implicit generics + monomorphization, `T?` nullable with flow-unwrap, `match` statements (literal/wildcard/binding patterns), conformance suite (50/50 green on gcc + tcc, plus MSVC in release CI), parser fuzzer test in cargo test.
+Shipped: hand-written lexer (indentation blocks, `{expr}` interpolation capture, spans), recursive-descent parser with error recovery, AST with spans, diagnostics with did-you-mean, name resolution + modules (`use`, aliases, embedded stdlib), type checker with full inference, implicit generics + monomorphization, `T?` nullable with flow-unwrap, `any` dynamic values (tagged runtime design: heterogeneous lists/dicts, runtime type dispatch, casts, `type_of`), `match` statements with literal/wildcard/binding patterns **and tuple/list destructuring** (nested patterns, wildcards mixed with literals, runtime list arity, fall-through), conformance suite (56 programs green on gcc + tcc, plus MSVC in release CI), parser fuzzer test in cargo test.
 
-Not shipped (roadmap says build, we say deferred): formal EBNF grammar document; error codes and lint levels; traits/interfaces; enums/ADTs with pattern matching beyond literal cases; **closures** (see Deferrals); const evaluation; a general attribute system (only `@soa` and `@export` exist); the 500-program conformance target (50 today); a 1-hour fuzzer run (cargo fuzz test is short).
+Not shipped (roadmap says build, we say deferred): formal EBNF grammar document; error codes and lint levels; traits/interfaces; enums/ADTs with pattern matching beyond tuple/list destructuring; **closures** (see Deferrals); const evaluation; a general attribute system (only `@soa` and `@export` exist); the 500-program conformance target (56 today); a 1-hour fuzzer run (cargo fuzz test is short).
 
 ## Phase 2: Middle End and Back End — ⚠️ C emitter only
 
-Shipped: checked IR (Tx/X/CS) → C11 emitter with refcounted ownership emission; compiles through gcc/clang/MSVC/TinyCC; `-O2` release builds; debug mode carries file:line into panics and breakpoint traps (`STILL_BREAKPOINTS`, used by the VS Code debugger adapter).
+Shipped: checked IR (Tx/X/CS) → C11 emitter with refcounted ownership emission; compiles through gcc/clang/MSVC/TinyCC; `-O2` release builds; debug mode carries file:line into panics and breakpoint traps (`STILL_BREAKPOINTS`, used by the VS Code debugger adapter) — re-verified end to end in v0.4: per-statement `#line` mapping (no drift), boundary-aware breakpoint path matching, and a verified matrix of full-path/basename/multi-entry/indented-body breakpoints.
 
 Deferred (this is the phase's backbone): HIR/MIR/SSA + verifier; optimization passes (inlining/DCE/escape analysis — gcc does this on emitted C today); LLVM or Cranelift backend; bytecode VM; **DWARF/PDB debug info — real debugger stepping is explicitly deferred** (breakpoints exist, stepping does not); incremental/query-based compilation; linker integration and cross-compilation triples; low-level codegen controls (struct layout attrs, calling conventions, inline asm, naked functions).
 
 ## Phase 3: Runtime and Memory — ⚠️ partial
 
-Shipped: refcounted runtime (strings/lists/dicts/SoA — Python sharing semantics, no GC pauses), panics with file:line, checked div/mod/index/overflow in debug, dynamic library loading at run time (the Python bridge's dlopen/LoadLibrary loader), `STILL_BREAKPOINTS` traps.
+Shipped: refcounted runtime (strings/lists/dicts/SoA — Python sharing semantics, no GC pauses), panics with file:line, checked div/mod/index/overflow in debug, dynamic library loading at run time (the Python bridge's dlopen/LoadLibrary loader), `STILL_BREAKPOINTS` traps, and the tagged `still_any` runtime value backing the `any` type (boxable scalars and containers, per-type dispatch in the emitter, string `+=` folded to in-place appends on `any`-free paths).
 
 Deferred: allocator trait/global swap, arena/bump/pool allocators; the `core`/`alloc`/`std` layer split (kernel work depends on it — therefore Phase 9 stays closed); replaceable panic handler; stack traces; destructors/`defer`/weak refs; sanitizer hooks; leak detector.
 
@@ -43,7 +43,7 @@ Shipped: file read/write, env vars, argv, clock, sleep, `run_cmd`. Everything el
 
 ## Phase 7: Tooling and Ecosystem — ✅ the shipped slice
 
-- **LSP: shipped** (`still lsp`) — JSON-RPC 2.0 with Content-Length framing on stdio, full text sync, publishDiagnostics on open/change/close, documentSymbol, hover (real signatures), completion (keywords + symbols), graceful shutdown, survives garbage input. Integration-tested against the real binary. No rename/format/find-references yet.
+- **LSP: shipped** (`still lsp`) — JSON-RPC 2.0 with Content-Length framing on stdio, full text sync, publishDiagnostics on open/change/close, documentSymbol, hover (real signatures), completion (keywords + symbols), find-references (with `includeDeclaration`) and rename (workspace edit over the identifier's tokens; invalid names report an error), graceful shutdown, survives garbage input. Matches come from the real lexer, so string literals and comments never match. Integration-tested against the real binary. No formatting or cross-file indexing yet.
 - **DAP: shipped for VS Code** (breakpoint traps + dap.js; stepping blocked on DWARF, see Phase 2).
 - Shipped: TextMate grammar + VS Code extension, `still test` runner, CI (conformance + examples + panic-path check + benchmark gate + MSVC job), release automation (tag → zip + vsix built on windows-latest, portable tcc attached).
 - Deferred: package manager/registry/lockfiles, formatter, linter, REPL, doc generator/docs site, profilers, tree-sitter grammar, JetBrains/Neovim plugins (Neovim works today via the LSP binary), self-hosting.
@@ -78,18 +78,18 @@ Windows is first-class: MSVC release CI, zip installer with PATH setup, portable
 
 `use py` follows the three-layer design: raw layer hidden in `stdlib/py.strc` (`still_py_*` externs), bridge layer in the C runtime (loader, GIL/error handling), native-style layer as `py.init/run/eval` with doc comments. The resolver/lockfile/PyPI automation is deferred.
 
-## The two headline deferrals (why)
+## The headline deferrals (why)
 
-1. **`any`/dynamic type** — heterogeneous containers are the #1 Python-compat gap, but bolting a dynamic value onto a refcounting emitter that specializes every operation per static type would wreck the emitter. Needs a tagged `still_value` runtime design done properly.
-2. **Closures** — capture semantics interact with the ownership/refcount emission (who owns the environment, when it is released). A half-implementation would leak or double-release. Needs the environment-as-value design first.
+1. **Closures** — capture semantics interact with the ownership/refcount emission (who owns the environment, when it is released). A half-implementation would leak or double-release. Needs the environment-as-value design first. v0.4 assessed the smaller "named functions as values with monomorphized static dispatch" slice and deferred it too: even without captures it needs a function type flowing through the whole type system (`Ty` variant ripples into equality/resolution/tagging and the emitted signatures), which is release-core surgery, not a bolt-on. The design note stays in worklog.
+2. **DWARF/PDB stepping** — breakpoints and panic line reporting are real (v0.4 re-verified the entire `#line`/breakpoint path); single-stepping needs real debug-info emission and is deferred with Phase 2.
 
-Both are worklog next-steps with ownership conventions already documented; neither is stubbed, and no release notes claim them.
+The other v0.3 headline deferral, `any`, shipped in v0.4 as the tagged `still_any` runtime value with per-type dispatch in the emitter (see Phase 1/3) — designed first, then shipped with conformance + fuzz coverage. Worklog next-steps keep the ownership conventions for what remains; no stubs, and no release notes claim deferred work.
 
 ## Phase-exit criteria scorecard (roadmap's own criteria)
 
 | Roadmap exit criterion | Status |
 | --- | --- |
-| Phase 1: 500-program conformance, 1h fuzzer | ❌ 50 programs, short fuzzer |
+| Phase 1: 500-program conformance, 1h fuzzer | ❌ 56 programs, short fuzzer |
 | Phase 2: native exes on 3 OSes, debugger steps | ⚠️ exes on Windows/Linux via C toolchains; macOS untested; stepping deferred |
 | Phase 3: freestanding program, custom entry/panic | ❌ |
 | Phase 4: 90% coverage, bench suite, doc-tests | ❌ partial (bench gate only) |

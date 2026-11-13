@@ -21,7 +21,7 @@ Still finds your C compiler automatically: checks `~/.still/bin/` (TCC/GCC), sys
 
 ## 2. Install the compiler
 
-1. Download and extract `still-v0.3.0-windows-x64.zip`
+1. Download and extract `still-v0.4.0-windows-x64.zip`
 2. Open the extracted folder in PowerShell and run:
 
    ```powershell
@@ -99,13 +99,13 @@ a project.
 
 ## 4. VS Code extension
 
-The release also has `still-lang-0.3.0.vsix`.
+The release also has `still-lang-0.4.0.vsix`.
 
 1. Install the compiler first (step 2), so `still` is on PATH
 2. Install the extension:
 
    ```powershell
-   code --install-extension still-lang-0.3.0.vsix
+   code --install-extension still-lang-0.4.0.vsix
    ```
 
    (or VS Code → Extensions view → `···` → **Install from VSIX...**)

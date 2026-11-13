@@ -1,6 +1,6 @@
 # Still — Worklog
 
-State: **v0.3.0 — match statements, LSP binary (`still lsp`), CPython bridge (`use py`), extern str returns, bench gate best-of-3; released as v0.3.0. See ROADMAP-STATUS.md for the honest phase-by-phase mapping.** Read this before touching anything. Token-dense on purpose.
+State: **v0.4.0 — `any` dynamic values, real tuple/list match patterns, verified #line/breakpoints, string += folding, LSP find-references/rename; released as v0.4.0. See ROADMAP-STATUS.md for the honest phase-by-phase mapping.** Read this before touching anything. Token-dense on purpose.
 
 ## What Still is (v0.2)
 
@@ -98,12 +98,12 @@ cargo test --release
 - Emitter ownership discipline: every ref-typed expression result is an OWNED temp registered in `temps`; statement end releases temps; assignment moves the temp into the place (unregister); call args transfer to callee (params dropped at return); return materializes into a temp BEFORE local drops (use-after-free class of bug — see Gotchas); `And/Or/Cond` emit if/else with release of the untaken side; loop bodies drop iteration temps to a mark; loop vars own a retained element per iteration.
 - Reference cycles leak (documented; no GC). Stress-verified: 1000 rounds x (200 strings + 200-list + 200-dict) flat ~1.9 MB RSS.
 
-## Verified status (all green at commit time)
+## Verified status (v0.4.0, all green at commit time)
 
-- 38/38 conformance (22 valid incl. soa/extern/modules/mandelbrot/pairs-loops/generics/nullable-flow, 16 invalid diagnostics).
-- cargo test: conformance runner, all examples compile, release smoke, fuzz (3000 garbage parses no-panic, deep nesting, token bound).
-- Bench: fib(35) release == gcc -O2 C (13.9 ms both on dev box; CI gate <3x).
-- Memory stress flat; ASAN clean on the repro cases that found the bugs below.
+- 56/56 conformance (30 valid incl. any + match_patterns, 26 invalid diagnostics), gcc + tcc in the Codespace, MSVC in release CI.
+- cargo test all suites: lib unit (3), conformance, examples compile, fuzz (4), lsp (2, real-protocol sessions incl. references/rename), python_bridge (1), unittests (1).
+- Debug matrix verified by hand in the Codespace: panic lines, breakpoint full-path/basename/multi-entry/indented-body hits.
+- Bench: fib(35) release == gcc -O2 C (CI gate <3x, best of 3). String += fold evidence documented in RELEASE_NOTES (no str bench in the gate).
 
 ## Bugs found and fixed during this rewrite (learn from these)
 
@@ -127,9 +127,9 @@ cargo test --release
 - `still test` compares exact stdout for valid/, expected-substring for invalid/ (expected files are .trim()'d).
 - VSCode extension is zero-dependency: `still ide check/symbols` JSON commands feed diagnostics/completion/hover; dap.js is a hand-rolled DAP server (launch → `still build` → spawn with STILL_BREAKPOINTS env; breakpoint hit = SIGTRAP, reported via output event; no continue-after-trap — honest limitation, documented).
 
-## Known limitations (v0.2, honest list)
+## Known limitations (updated at each release, honest list)
 
-- No closures, nested functions, classes/inheritance, exceptions, chained comparisons, heterogeneous containers (need `any`), threads, borrow checking. All are worklog-future items, not promises. (`match` exists since v0.2.1 for literal int/str cases; tuple/struct patterns and exhaustiveness are future items.)
+- No closures, nested functions, classes/inheritance, exceptions, chained comparisons, threads, borrow checking. All are worklog-future items, not promises. (`match` exists since v0.2.1 for literal int/str cases; tuple/list destructuring landed in v0.4.0 — struct patterns and exhaustiveness are still future. Heterogeneous containers shipped in v0.4.0 via the `any` tagged value.)
 - `global` keyword EXISTS (v0.2.1): inside a function, a name matching a module-level global is still shadowed by a fresh local UNLESS the fn declares `global x` (comma list ok) first. `global x` requires x to exist at module level (Still does not create globals from fns), errors on `x = ...` before the declaration, and relaxes the old blanket rejection at check_target (aug-assign/multi-target paths work too). Reads of foreign/global names inside fns are unaffected; generic instantiations start with a fresh global_names set.
 - Dict iteration order is hash order (deterministic per build, not insertion).
 - `print`/`str()` of a `str?` prints the string or `none` (nested containers still quote strings).
@@ -163,13 +163,27 @@ cargo test --release
 - ci.yml bench gate hardened: best-of-3 for both sides before the ≤3x check (plain bash loops + if-guards — no `[ ] && cmd` lines, set -e would kill the script on false comparisons), diff of outputs kept.
 - v0.3.0 release engineering: version bumps (Cargo.toml/lock, lib.rs VERSION, vscode package.json + README, SETUP-WINDOWS.md, cc.rs tcc URLs → v0.3.0 assets), RELEASE_NOTES.md rewritten (new features + py troubleshooting), ROADMAP-STATUS.md added (honest 13-phase + addenda mapping), tcc zips re-attached to v0.3.0 from the PC.
 
+## v0.4.0 session log (any + debug verification + += folding + match patterns + LSP refs/rename; all compile work in the Linux Codespace)
+
+- `any` shipped end to end (flagship): tagged `still_any` runtime value, boxable scalars + lists/dicts, runtime dispatch for arithmetic/comparison/casts/membership/truthiness, `type_of`; conformance any.strc + fuzz 4/4 + lsp 2/2 + python_bridge 1/1 + unittests 3/3 green. Commits 234e9da, aec48ac.
+- String `+=` folding: `s += t` and `s = s + t` on a str both emit `still_str_append_inplace`; verified emitted C has 2 append sites, 0 `still_str_cat` (no str bench in the CI gate — fold evidence documented in RELEASE_NOTES instead of a bench number).
+- `#line` debug verification: panics report real .strc lines; breakpoints fixed properly (commit c371c4b): emit_c `bp()` writes the `#line` directive UNCONDITIONALLY per statement (the old last_line tracker drifted — stmt2's trap fired as line ~7), and still_rt `still_bp_check` gained boundary-aware suffix path matching `still_bp_file_eq` (`__FILE__` at runtime carries the build-dir prefix, so exact compare could never hit full-path env entries). Verified matrix: full-path `STILL_BREAKPOINTS=/tmp/x.strc:1..5` (line 5 unreachable in a panicking program = correct), line-5 hit on a reachable program, basename (DAP) form, multi-entry `:1,:3` stops at first, loop-body + if-body indented traps. dap.js contract unchanged.
+- Match tuple/list patterns (commits 7e7c604, eb96ca9, c8f9c5b, 40b09b8): parser accepts `case (a, b):` / `case [x, y]:` via parse_pattern_seq/parse_pattern_el (nested patterns, bool/float/negative literals, `_`, none rejected); checker classifies arms — scalar int/str literals keep the `subject in [values]` In-lowering, tuple/list patterns ALWAYS lower through the binding tower (length + element tests) because the runtime has no list-of-container representation for the In path; all-literal container patterns go through the same tower with equality tests only. Design lessons learned the hard way:
+  - `matches!(tok, Tok::P(close))` binds a FRESH var in pattern position and matches any punctuation — must be `matches!(&self.cur().tok, Tok::P(p) if *p == close)`.
+  - Binding towers can't be if-arms with cond=true: the outer `if true { tower1 } else { tower2 }` always takes branch 1, so later arms are unreachable (conformance caught it: every non-first tower arm never fired). Correct lowering folds arms into ONE chain, last-first, with the remaining arms in the else of EVERY test level (scalar arms: one else; tower arms: every level's else; zero-test towers e.g. `case (a, b):` are unconditional → wrapped in `if true` for scoping, later arms dropped as unreachable).
+  - Top-level fresh assignments become module globals (gmap), so pattern binders collided across arms (`cannot assign int to 'b' which holds str`). Fix: `Ctx.pat_binders` set collected from the lowered tower; check_assign's fresh-name path declares arm-locals for those names even at top level (in_fn path unchanged; names already in scopes/gmap still overwrite with the normal type check).
+  - Each cloned else-branch of a tower re-checks the remaining arms (fresh local ids per occurrence — correct, emit uses id-based C names), so tree size grows with the product of earlier arms' test levels; fine for realistic matches, noted as a known shape.
+- LSP find-references + rename (commit b30afaf): ident_occurrences tokenizes the doc with the real lexer (BOM/`\r\n` normalized first; keywords can't match; strings/comments can't match), reference_locations with includeDeclaration (first occurrence = declaration for file-level names/params), rename → `{changes:{uri:[edits]}}`, invalid new name → error 3 "invalid new name". Capabilities advertise referencesProvider/renameProvider. tests/lsp.rs extended: refs incl/excl decl, rename edit, rename-error. Gotcha: word_at extends both directions from the cursor — position must sit ON the identifier (test initially used the '(' at char 11 instead of 'x' at char 12).
+- Closures: deferred again, deliberately. The v0.4 attempt scoped to "named functions as values with monomorphized static dispatch" was sized against instantiate() and rejected: even without captures it needs a Ty::Func variant rippling through ty_eq/resolve/ty_tag/emit signatures — type-system core surgery, wrong risk profile right before tagging. Full capture-by-value design note stays in Next steps; ROADMAP-STATUS documents the rationale.
+- Release engineering: version bumps everywhere (Cargo.toml/lock, lib.rs VERSION, vscode package.json+README, SETUP-WINDOWS.md, cc.rs tcc URLs → v0.4.0), RELEASE_NOTES.md rewritten (every code example in it was RUN in the Codespace before shipping — the first draft wrongly claimed `x is int` narrowing which doesn't exist; fixed to type_of), ROADMAP-STATUS.md updated to v0.4 (any moves from headline deferral to shipped; closures + DWARF stepping are the headline deferrals; conformance count 50 → 56).
+
 ## Next steps (priority order)
 
-1. `any`/dynamic type for heterogeneous dicts (the #1 Python-compat gap; needs a tagged still_value runtime design — deferral rationale in ROADMAP-STATUS.md).
-2. Closures: capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures.
-3. Borrow-free mutation story for structs in lists (`xs[i].x = v` works; `xs[i] = xs[i]` copies).
-4. String builder / `+=` folding for io.write_lines-style loops (quadratic today).
-5. Match follow-ups: tuple/list/struct patterns + exhaustiveness (literal int/str cases landed; contains-based lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
-6. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces).
-7. Crash-only debugging → real stepping (needs DWARF work in the C backend).
-8. LSP follow-ups: find-references, rename, cross-module completion (the binary itself shipped in v0.3.0).
+1. Closures: capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures. (The smaller first step — function values via a Ty::Func variant with per-instantiation static dispatch — is designed in ROADMAP-STATUS; it is type-system core work, schedule it as its own session.)
+2. Borrow-free mutation story for structs in lists (`xs[i].x = v` works; `xs[i] = xs[i]` copies).
+3. Match follow-ups: struct patterns + exhaustiveness (tuple/list landed in v0.4.0; contains-based scalar lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
+4. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces).
+5. Crash-only debugging → real stepping (needs DWARF work in the C backend).
+6. LSP follow-ups: cross-module completion and references (single-file references/rename shipped in v0.4.0).
+7. String-fold follow-up: add a string-building bench to the CI gate so `+=` folding has a regression number (fold evidence is documented in RELEASE_NOTES for v0.4.0).
+8. Known v0.4 shape worth revisiting: match towers clone the remaining arms into every else level (tree grows with the product of earlier arms' test levels) — fine at current sizes, revisit if big matches appear.

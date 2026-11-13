@@ -48,8 +48,8 @@ full path of the binary.
   ```bash
   npm install -g @vscode/vsce
   cd vscode
-  vsce package     # creates still-lang-0.3.0.vsix
-  code --install-extension still-lang-0.3.0.vsix
+  vsce package     # creates still-lang-0.4.0.vsix
+  code --install-extension still-lang-0.4.0.vsix
   ```
 
 ## 3. Features
