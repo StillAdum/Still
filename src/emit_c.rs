@@ -37,6 +37,38 @@ pub fn emit(prog: &Program) -> String {
     for e in &prog.externs {
         extern_map.insert(e.name.clone(), e.clone());
     }
+    // Real C prototypes for extern "C" functions. Without them every call is
+    // an implicit declaration: integer arguments are truncated to 32 bits
+    // (HWND_TOPMOST = -1 arrives as 0xFFFFFFFF), pointer-typed returns are
+    // truncated to int (GetModuleHandleA on 64-bit Windows), and gcc/tcc
+    // differ in how the register garbage shakes out. Prototyping makes the
+    // ABI exact: int params/returns are carried as int64_t (handles stay
+    // whole), str params are char* (still_str->bytes), str returns are
+    // const char*.
+    let mut ext_protos = String::new();
+    ext_protos.push_str("/* extern \"C\" declarations (emitted by Still) */\n");
+    for e in &prog.externs {
+        let mut pts: Vec<String> = Vec::new();
+        for t in &e.c_params {
+            pts.push(match t {
+                Ty::Float => "double".to_string(),
+                Ty::Bool => "int".to_string(),
+                Ty::Str => "char*".to_string(),
+                _ => "int64_t".to_string(),
+            });
+        }
+        if e.variadic {
+            pts.push("...".to_string());
+        }
+        let rt = match &e.c_ret {
+            Ty::Str => "const char*".to_string(),
+            Ty::Float => "double".to_string(),
+            Ty::Bool => "bool".to_string(),
+            Ty::NoneTy => "void".to_string(),
+            _ => "int64_t".to_string(),
+        };
+        ext_protos.push_str(&format!("{} {}({});\n", rt, e.name, pts.join(", ")));
+    }
     let debug = prog.debug;
     let mut e = Emitter {
         prog: clone_program(prog),
@@ -66,6 +98,7 @@ pub fn emit(prog: &Program) -> String {
         out.push_str("#define STIL_DEBUG 1\n");
     }
     out.push_str("#include <math.h>\n");
+    out.push_str(&ext_protos);
     for h in &e.helpers {
         out.push_str(h);
         out.push('\n');

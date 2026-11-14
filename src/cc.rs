@@ -301,7 +301,7 @@ pub fn setup_cc() -> Result<PathBuf, String> {
         // Download portable TinyCC (~2MB): primary source is our release;
         // mirrors are tried as fallbacks.
         let urls = [
-            "https://github.com/StillAdum/Still/releases/download/v0.4.0/tcc-win64.zip",
+            "https://github.com/StillAdum/Still/releases/download/v0.4.1/tcc-win64.zip",
             "https://github.com/bained/C-Chads_tinycc-binary/raw/main/C-Chads_tinycc_0.9.28rc-binary.zip",
         ];
         let ps_cmd = format!(
@@ -325,7 +325,7 @@ pub fn setup_cc() -> Result<PathBuf, String> {
             return Ok(PathBuf::from("tcc"));
         }
         let url = if cfg!(target_arch = "x86_64") && cfg!(target_os = "linux") {
-            Some("https://github.com/StillAdum/Still/releases/download/v0.4.0/tcc-linux-x86_64.tar.gz")
+            Some("https://github.com/StillAdum/Still/releases/download/v0.4.1/tcc-linux-x86_64.tar.gz")
         } else {
             None
         };
