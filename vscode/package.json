@@ -2,7 +2,7 @@
   "name": "still-lang",
   "displayName": "Still",
   "description": "Still programming language support: syntax highlighting, autocomplete, errors, run and debug",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "still-lang",
   "license": "MIT",
   "repository": {
