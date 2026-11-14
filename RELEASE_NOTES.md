@@ -1,50 +1,33 @@
-# Still v0.4.0 — Windows setup
+# Still v0.4.1 — Windows setup
 
 **Still** is a compiled language that reads like Python and runs like C.
 `fib(35)` matches `gcc -O2` C. Indentation syntax, type inference, refcounted
 strings/lists/dicts (no GC pauses), value structs, `@soa` struct-of-arrays for
-game hot loops, `extern "C"` escape hatch, and now: `any` values, real
-tuple/list `match` patterns, verified debug line info with breakpoints, and
-LSP find-references/rename.
+game hot loops, `extern "C"` escape hatch, `any` values, real tuple/list
+`match` patterns, verified debug line info with breakpoints, and LSP
+find-references/rename.
 
-## What's new in v0.4.0
+## What's new in v0.4.1
 
-- **`any` end-to-end** — one type for heterogeneous data: `mixed = [1, "two",
-  3.5, true]` typechecks, `type_of` reports the runtime type, and
-  arithmetic, comparisons, casts, membership and truthiness all dispatch on
-  it (`x is none` narrows too). Boxable scalars (int, float, bool, str) and
-  containers (lists, dicts) carry a runtime tag. Covered by the conformance
-  suite and the garbage-input fuzzer.
-- **`match` tuple/list patterns (for real this time)** — destructuring case
-  arms: `case (a, b):`, `case [x, y]:`, nested patterns like
-  `case (a, (b, c)):`, wildcards mixed with literals (`case [_, 20, _]:`),
-  and all-literal container patterns (`case (3, "hi"):`). List patterns check
-  length at run time, so `case [a, b]:` on a 3-list simply falls through to
-  the next arm. v0.3's notes promised these; v0.4 ships them, with conformance
-  tests for nesting, fall-through, arity errors and subject-type errors.
-- **Debug line info you can trust** — panics and breakpoints now report the
-  real `.strc` line in every case we could construct: the generated C writes
-  the `#line` mapping per statement instead of trusting a running counter,
-  and `STILL_BREAKPOINTS` matching handles the compiler's build-dir-prefixed
-  paths (full-path and basename forms, multiple entries, indented loop/if
-  bodies). Verified end to end with `still run`; the VS Code DAP contract
-  (basename entries + SIGTRAP stop) is unchanged.
-- **String `+=` folding everywhere** — `s += t` and `s = s + t` on a `str`
-  both fold to the in-place append, so string building in loops stays linear.
-  Evidence: the emitted C contains two `still_str_append_inplace` sites and
-  zero `still_str_cat` calls. (There is no string benchmark in the CI gate,
-  so this ships with fold evidence rather than a bench number.)
-- **LSP find-references and rename** — `still lsp` now answers
-  `textDocument/references` (with `includeDeclaration`) and
-  `textDocument/rename` (workspace edit over every identifier token of the
-  name; invalid names report an error). Matches come from the real lexer, so
-  string literals and comments never match.
+- **Real C prototypes for `extern "C"` declarations** — the generated C
+  previously called externs with no declarations (implicit declarations).
+  On 64-bit Windows that truncates integer arguments to 32 bits
+  (`HWND_TOPMOST` = -1 arrived as 0xFFFFFFFF → "invalid window handle") and
+  truncates pointer returns to `int` (`GetModuleHandleA` under gcc returned
+  garbage, so `CreateWindowExA` failed outright). Behavior also differed
+  randomly between tcc and gcc. The compiler now emits a prototype per
+  extern — `int64_t` for ints/handles, `char*` for str params,
+  `const char*` for str returns, `double` for floats — so Win32 GUI
+  programs written in Still behave identically on every C compiler.
+  Found the hard way: a whole raytraced voxel game rendered black because
+  of this; after the fix its menu and gameplay blits verify pixel-perfect
+  on screen under both tcc and gcc `-O3 -flto`.
 
 ## Install on Windows (2 minutes)
 
 ### Step 1 — get the zip
 
-Download **`still-v0.4.0-windows-x64.zip`** (attached below) and extract it.
+Download **`still-v0.4.1-windows-x64.zip`** (attached below) and extract it.
 
 ### Step 2 — install the compiler
 
@@ -78,7 +61,7 @@ Still compiles through C, so it needs one of:
 ### Step 4 — VS Code extension (optional)
 
 ```powershell
-code --install-extension still-lang-0.4.0.vsix
+code --install-extension still-lang-0.4.1.vsix
 ```
 
 Gives you highlighting, autocomplete, live error checking, **Ctrl+Alt+R** to
@@ -87,31 +70,11 @@ run, and **F5** to debug with breakpoints.
 ## Try the new stuff
 
 ```still
-# any: one list, every shape
-mixed = [1, "two", 3.5, true]
-for x in mixed:
-    print(x, type_of(x))
+# extern "C" now emits real prototypes - Win32 works on any C compiler
+extern "C":
+    func MessageBoxA(hwnd: int, text: str, caption: str, flags: int) -> int
 
-# match: destructuring, nesting, wildcards
-p = (3, "hi")
-match p:
-    case (0, b):
-        print("zero")
-    case (3, greeting):
-        print("hello", greeting)
-
-xs = [10, 20, 30]
-match xs:
-    case [a, b]:
-        print("two")
-    case [a, b, c]:
-        print("three", a, b, c)
-
-# string building stays linear
-s = ""
-for w in ["ab", "cd", "ef"]:
-    s += w
-print(s)
+MessageBoxA(0, "Hello from Still", "v0.4.1", 0)
 ```
 
 ```powershell

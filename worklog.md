@@ -1,6 +1,6 @@
 # Still — Worklog
 
-State: **v0.4.0 — `any` dynamic values, real tuple/list match patterns, verified #line/breakpoints, string += folding, LSP find-references/rename; released as v0.4.0. See ROADMAP-STATUS.md for the honest phase-by-phase mapping.** Read this before touching anything. Token-dense on purpose.
+State: **v0.4.1 — extern "C" prototypes in generated C (fixes 64-bit Windows GUI breakage); released as v0.4.1. See ROADMAP-STATUS.md for the honest phase-by-phase mapping.** Read this before touching anything. Token-dense on purpose.
 
 ## What Still is (v0.2)
 
@@ -104,6 +104,35 @@ cargo test --release
 - cargo test all suites: lib unit (3), conformance, examples compile, fuzz (4), lsp (2, real-protocol sessions incl. references/rename), python_bridge (1), unittests (1).
 - Debug matrix verified by hand in the Codespace: panic lines, breakpoint full-path/basename/multi-entry/indented-body hits.
 - Bench: fib(35) release == gcc -O2 C (CI gate <3x, best of 3). String += fold evidence documented in RELEASE_NOTES (no str bench in the gate).
+
+## v0.4.1 session log (extern "C" prototypes — the invisible-window bug)
+
+- Symptom: the voxel game (Win32 via `extern "C"`, popup window + StretchDIBits
+  blit loop) showed a black client area; `SetWindowPos(HWND_TOPMOST)` failed
+  with GLE 1400; blits returned 0 with clip box 2. Probes 1–12 bisected it:
+  window creation ok, ShowWindow ok, DC ok, `blit ret` flaky tcc/broken gcc.
+- Root cause: generated C declares NOTHING for externs — every call is an
+  implicit declaration. C implicit rules truncate: (a) int args to 32 bits
+  (`-1` → 0xFFFFFFFF → HWND_TOPMOST invalid handle), (b) pointer returns to
+  int (GetModuleHandleA → truncated HMODULE under gcc → CreateWindowExA
+  fails outright). tcc "worked" by register luck; gcc -O3 -flto did not.
+  One game-side bug also surfaced and was fixed in the same pass: the game's
+  StretchDIBits extern had 12 args (missing iUsage) — SRCCOPY landed in the
+  iUsage slot; with the correct 13-arg declaration blits succeed 100%.
+- Fix (emit_c.rs `emit()`): emit a real C prototype per extern before any
+  use — int64_t for int/handle params and returns, char* for str params,
+  const char* for str returns (borrowed, copied via still_str_new at the
+  call site exactly as before), double for floats, void for none. Emitted
+  right after the includes, before helpers/globals/protos/body.
+- Evidence: probe with the 13-arg declaration blits 150/150 frames and
+  GetPixel reads back the framebuffer color from the SCREEN; game smoke run
+  prints `menu px1/px2` + `game px1/px2` = 65535 (white menu text read back
+  off the screen via GetPixel on the window DC); gcc build has zero
+  implicit-declaration warnings (only benign oversized-constant notes).
+- Cross-compile note: cargo can't link locally (no MSVC) — the Windows
+  still.exe is built in the Codespace with
+  `cargo build --release --target x86_64-pc-windows-gnu`
+  (rustup target already installed there), pulled back over ssh base64.
 
 ## Bugs found and fixed during this rewrite (learn from these)
 
