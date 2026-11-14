@@ -63,7 +63,10 @@ pub fn emit(prog: &Program) -> String {
         "hypot", "fopen_s",
     ];
     for e in &prog.externs {
-        if libc_names.contains(&e.name.as_str()) {
+        // The runtime header declares still_* helpers with exact const-qualified
+        // signatures; skip those too (a char*/const char* mismatch would be a
+        // conflicting-types error, not a mere warning).
+        if libc_names.contains(&e.name.as_str()) || e.name.starts_with("still_") {
             continue;
         }
         let mut pts: Vec<String> = Vec::new();
