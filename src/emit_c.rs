@@ -47,7 +47,25 @@ pub fn emit(prog: &Program) -> String {
     // const char*.
     let mut ext_protos = String::new();
     ext_protos.push_str("/* extern \"C\" declarations (emitted by Still) */\n");
+    // Names the C runtime already declares; emitting our own prototype would
+    // conflict with the system header (e.g. printf). Those functions keep
+    // working through the headers' own declarations.
+    let libc_names = [
+        "printf", "fprintf", "sprintf", "snprintf", "puts", "putchar", "gets",
+        "fgets", "fputs", "fopen", "fclose", "fread", "fwrite", "fseek",
+        "ftell", "rewind", "fflush", "remove", "rename", "malloc", "calloc",
+        "realloc", "free", "strlen", "strcpy", "strncpy", "strcat", "strncat",
+        "strcmp", "strncmp", "memcmp", "memcpy", "memmove", "memset", "strstr",
+        "strchr", "strrchr", "abs", "labs", "exit", "atoi", "atof", "rand",
+        "srand", "qsort", "bsearch", "getenv", "system", "time", "clock",
+        "sqrt", "pow", "sin", "cos", "tan", "atan", "atan2", "asin", "acos",
+        "exp", "log", "log10", "log2", "floor", "ceil", "fmod", "round",
+        "hypot", "fopen_s",
+    ];
     for e in &prog.externs {
+        if libc_names.contains(&e.name.as_str()) {
+            continue;
+        }
         let mut pts: Vec<String> = Vec::new();
         for t in &e.c_params {
             pts.push(match t {
