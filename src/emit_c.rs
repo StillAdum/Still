@@ -8,6 +8,9 @@ struct LocalSlot {
     cname: String,
     ty: Ty,
     dead: bool,
+    /// Storage we do not own: a by-pointer `self` param or a borrowed loop
+    /// proxy (e.g. `list->data[i]`). Never released.
+    borrowed: bool,
 }
 
 pub struct Emitter {
@@ -26,6 +29,8 @@ pub struct Emitter {
     loop_temp_marks: Vec<usize>,
     body_local_marks: Vec<usize>,
     moved: HashSet<u32>,
+    /// Local id of the current function's by-pointer `self` param, if any.
+    self_ptr: Option<u32>,
     fn_ret: Ty,
     debug: bool,
     last_line: u32,
@@ -107,6 +112,7 @@ pub fn emit(prog: &Program) -> String {
         loop_temp_marks: Vec::new(),
         body_local_marks: Vec::new(),
         moved: HashSet::new(),
+        self_ptr: None,
         fn_ret: Ty::NoneTy,
         debug,
         last_line: 0,
@@ -173,11 +179,20 @@ impl Emitter {
         for f in &funcs {
             let vis = if f.exported { "" } else { "static " };
             let ret = if matches!(resolve(&f.ret), Ty::NoneTy) { "void".to_string() } else { self.ctype(&resolve_deep(&f.ret)) };
+            let ptr_self = self.ptr_self_fn(f);
             let params: Vec<String> = f
                 .params
                 .iter()
                 .enumerate()
-                .map(|(i, (_, t))| format!("{} v{}", self.ctype(&resolve_deep(t)), i))
+                .map(|(i, (_, t))| {
+                    if i == 0 && ptr_self {
+                        // methods receive self by pointer so field writes
+                        // inside the body mutate the caller's value
+                        format!("{}* v{}", self.ctype(&resolve_deep(t)), i)
+                    } else {
+                        format!("{} v{}", self.ctype(&resolve_deep(t)), i)
+                    }
+                })
                 .collect();
             self.protos.push_str(&format!("{}{} {}({});\n", vis, ret, f.cname, params.join(", ")));
         }
@@ -191,6 +206,7 @@ impl Emitter {
         let inits2 = self.prog.module_inits.clone();
         for (m, cs) in &inits2 {
             let name = format!("still_mod_{}__init", sanitize(m));
+            self.self_ptr = None;
             self.emit_function(&name, true, Ty::NoneTy, &[], cs);
         }
         let funcs2 = self.prog.funcs.clone();
@@ -202,6 +218,7 @@ impl Emitter {
                 .map(|(i, (_, t))| (format!("v{}", i), resolve_deep(t)))
                 .collect();
             let ret = resolve_deep(&f.ret);
+            self.self_ptr = if self.ptr_self_fn(&f) { Some(0) } else { None };
             self.emit_function(&f.cname, !f.exported, ret, &params, &f.body.clone());
         }
         let main_body = self.prog.main_body.clone();
@@ -212,6 +229,7 @@ impl Emitter {
             head.push_str(&format!("    {}();\n", n));
         }
         let save = std::mem::replace(&mut self.body, String::new());
+        self.self_ptr = None;
         self.emit_function("main", false, Ty::Int, &[], &main_body);
         let main_code = std::mem::replace(&mut self.body, save);
         self.body.push_str(&main_code.replace("__MODULE_INITS__", &head));
@@ -230,13 +248,25 @@ impl Emitter {
         self.last_line = 0;
         self.last_file.clear();
         for (cname, ty) in params {
-            self.locals.push(LocalSlot { cname: cname.clone(), ty: ty.clone(), dead: false });
+            self.locals.push(LocalSlot { cname: cname.clone(), ty: ty.clone(), dead: false, borrowed: false });
+        }
+        if let Some(sp) = self.self_ptr {
+            if let Some(slot) = self.locals.get_mut(sp as usize) {
+                slot.borrowed = true;
+            }
         }
         let vis = if is_static && name != "main" { "static " } else { "" };
         let ret_c = if matches!(resolve(&ret), Ty::NoneTy) { "void".to_string() } else { self.ctype(&ret) };
         let param_list: Vec<String> = params
             .iter()
-            .map(|(c, t)| format!("{} {}", self.ctype(t), c))
+            .enumerate()
+            .map(|(i, (c, t))| {
+                if Some(i as u32) == self.self_ptr {
+                    format!("{}* {}", self.ctype(t), c)
+                } else {
+                    format!("{} {}", self.ctype(t), c)
+                }
+            })
             .collect();
         let pl = if param_list.is_empty() && name != "main" {
             "void".to_string()
@@ -253,6 +283,9 @@ impl Emitter {
         let n_params = params.len();
         self.emit_block(body);
         for id in (0..n_params).rev() {
+            if self.locals[id as usize].borrowed {
+                continue; // by-pointer self: we never own the pointee
+            }
             self.drop_local(id as u32);
         }
         self.drop_temps_to(0);
@@ -356,7 +389,7 @@ impl Emitter {
     }
 
     fn drop_local(&mut self, id: u32) {
-        if self.moved.contains(&id) || self.locals[id as usize].dead {
+        if self.moved.contains(&id) || self.locals[id as usize].dead || self.locals[id as usize].borrowed {
             return;
         }
         let (cname, ty) = {
@@ -1037,7 +1070,7 @@ impl Emitter {
             CS::Decl { local, name, ty, value } => {
                 let rty = resolve_deep(ty);
                 let cname = format!("v{}", local);
-                self.locals.push(LocalSlot { cname: cname.clone(), ty: rty.clone(), dead: false });
+                self.locals.push(LocalSlot { cname: cname.clone(), ty: rty.clone(), dead: false, borrowed: false });
                 let value = value.clone().unwrap_or(Tx { ty: Ty::NoneTy, span: Span::new(std::rc::Rc::from("d"), 1, 1), x: X::NoneV });
                 let vty = resolve_deep(&value.ty);
                 self.set_line(&value.span);
@@ -1138,25 +1171,45 @@ impl Emitter {
                 let lmark = self.locals.len();
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
-                self.locals.push(LocalSlot { cname: cname.clone(), ty: elem.clone(), dead: false });
-                self.raw("    for (int64_t __i = 0; __i < {l}->len; __i++) {".replace("{l}", &l).as_str());
                 let refd = self.ty_has_refs(&elem);
-                if refd {
-                    let retain = self.retain_expr(&elem).replace("_v", &format!("{}->data[__i]", l));
-                    let ct = self.ctype(&elem);
-                    self.line(format!("{} {} = {};", ct, cname, retain));
+                let struct_elem = matches!(&elem, Ty::Named(q) if self.prog.structs.get(q).map(|s| !s.is_soa).unwrap_or(false));
+                if struct_elem {
+                    // Loop vars are read-only, so bind the element IN PLACE:
+                    // the loop var is an lvalue proxy into the list data, and
+                    // method calls / field writes on it mutate the real
+                    // element. Every use re-reads data[ctr], so pushes inside
+                    // the body stay safe. The list owns the element; nothing
+                    // to retain or drop.
+                    let ctr = format!("__i_{}", self.newtmp());
+                    self.raw(&format!("    for (int64_t {ctr} = 0; {ctr} < {l}->len; {ctr}++) {{", ctr = ctr, l = l));
+                    self.locals.push(LocalSlot {
+                        cname: format!("{}->data[{}]", l, ctr),
+                        ty: elem.clone(),
+                        dead: false,
+                        borrowed: true,
+                    });
+                    self.emit_loop_body(body);
+                    self.raw("    }");
                 } else {
-                    let ct = self.ctype(&elem);
-                    self.line(format!("{} {} = {}->data[__i];", ct, cname, l));
-                }
-                self.emit_loop_body(body);
-                if refd {
-                    let d = self.drop_stmt(&elem, &cname);
-                    if !d.is_empty() {
-                        self.line(d);
+                    self.locals.push(LocalSlot { cname: cname.clone(), ty: elem.clone(), dead: false, borrowed: false });
+                    self.raw("    for (int64_t __i = 0; __i < {l}->len; __i++) {".replace("{l}", &l).as_str());
+                    if refd {
+                        let retain = self.retain_expr(&elem).replace("_v", &format!("{}->data[__i]", l));
+                        let ct = self.ctype(&elem);
+                        self.line(format!("{} {} = {};", ct, cname, retain));
+                    } else {
+                        let ct = self.ctype(&elem);
+                        self.line(format!("{} {} = {}->data[__i];", ct, cname, l));
                     }
+                    self.emit_loop_body(body);
+                    if refd {
+                        let d = self.drop_stmt(&elem, &cname);
+                        if !d.is_empty() {
+                            self.line(d);
+                        }
+                    }
+                    self.raw("    }");
                 }
-                self.raw("    }");
                 self.loop_temp_marks.pop();
                 self.loop_local_marks.pop();
                 for sl in &mut self.locals {
@@ -1175,10 +1228,10 @@ impl Emitter {
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
                 if let Some(iv) = ivar {
-                    self.locals.push(LocalSlot { cname: format!("v{}", iv), ty: Ty::Int, dead: false });
+                    self.locals.push(LocalSlot { cname: format!("v{}", iv), ty: Ty::Int, dead: false, borrowed: false });
                     self.line(format!("int64_t v{} = 0;", iv));
                 }
-                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Any, dead: false });
+                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Any, dead: false, borrowed: false });
                 self.raw(&format!("    for (int64_t __i = 0; __i < still_any_len({}); __i++) {{", l));
                 if let Some(iv) = ivar {
                     self.line(format!("v{} = __i;", iv));
@@ -1210,7 +1263,7 @@ impl Emitter {
                 let lmark = self.locals.len();
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
-                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Int, dead: false });
+                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Int, dead: false, borrowed: false });
                 self.line(format!(
                     "for (int64_t {c} = {s}; ({st} > 0) ? ({c} < {e}) : ({c} > {e}); {c} = still_add({c}, {st}, __FILE__, __LINE__)) {{",
                     c = cname,
@@ -1238,8 +1291,8 @@ impl Emitter {
                 let lmark = self.locals.len();
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
-                self.locals.push(LocalSlot { cname: icn.clone(), ty: Ty::Int, dead: false });
-                self.locals.push(LocalSlot { cname: ecn.clone(), ty: elem.clone(), dead: false });
+                self.locals.push(LocalSlot { cname: icn.clone(), ty: Ty::Int, dead: false, borrowed: false });
+                self.locals.push(LocalSlot { cname: ecn.clone(), ty: elem.clone(), dead: false, borrowed: false });
                 self.raw("    for (int64_t __i = 0; __i < {l}->len; __i++) {".replace("{l}", &l).as_str());
                 self.line(format!("int64_t {} = __i;", icn));
                 let refd = self.ty_has_refs(&elem);
@@ -1276,7 +1329,7 @@ impl Emitter {
                 let lmark = self.locals.len();
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
-                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Str, dead: false });
+                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Str, dead: false, borrowed: false });
                 self.raw("    for (int64_t __i = 0; __i < {s}->len; __i++) {".replace("{s}", &sv).as_str());
                 self.line(format!(
                     "still_str* {} = still_str_index({}, __i, __FILE__, __LINE__);",
@@ -1302,7 +1355,7 @@ impl Emitter {
                 let lmark = self.locals.len();
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
-                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Int, dead: false });
+                self.locals.push(LocalSlot { cname: cname.clone(), ty: Ty::Int, dead: false, borrowed: false });
                 self.line(format!("for (int64_t {} = 0; {} < {}->len; {}++) {{", cname, cname, sv, cname));
                 self.emit_loop_body(body);
                 self.raw("    }");
@@ -1341,8 +1394,8 @@ impl Emitter {
                 let lmark = self.locals.len();
                 self.loop_temp_marks.push(tmark);
                 self.loop_local_marks.push(lmark);
-                self.locals.push(LocalSlot { cname: acn.clone(), ty: ta.clone(), dead: false });
-                self.locals.push(LocalSlot { cname: bcn.clone(), ty: tb.clone(), dead: false });
+                self.locals.push(LocalSlot { cname: acn.clone(), ty: ta.clone(), dead: false, borrowed: false });
+                self.locals.push(LocalSlot { cname: bcn.clone(), ty: tb.clone(), dead: false, borrowed: false });
                 self.raw(&format!("    for (int64_t __i = 0; __i < {l}->len; __i++) {{", l = l));
                 let access = format!("({l})->data[__i]", l = l);
                 let ra = self.retain_expr(&ta).replace("_v", &format!("({access}).f0", access = access));
@@ -1482,10 +1535,38 @@ impl Emitter {
 
     fn place_lvalue(&mut self, p: &Place) -> String {
         match p {
-            Place::Local(id) => self.locals[*id as usize].cname.clone(),
+            Place::Local(id) => {
+                if self.self_ptr == Some(*id) {
+                    format!("(*{})", self.locals[*id as usize].cname)
+                } else {
+                    self.locals[*id as usize].cname.clone()
+                }
+            }
             Place::Global(c) => c.clone(),
             Place::Field(base, name) => format!("{}.{}", self.place_lvalue(base), name),
-            Place::Index(base, idx) => format!("{}[{}]", self.place_deref_base(base), self.emit_expr(idx)),
+            Place::Index(base, idx) => {
+                let bty = resolve_deep(&self.place_base_ty(base));
+                let b = self.place_lvalue(base);
+                let i = self.emit_expr(idx);
+                match &bty {
+                    Ty::Dict(k, v) => format!(
+                        "(*still_dict_{}_{}_get_ptr({}, {}, __FILE__, __LINE__))",
+                        ty_tag(&resolve_deep(k)),
+                        ty_tag(&resolve_deep(v)),
+                        b,
+                        i
+                    ),
+                    Ty::List(_) => format!(
+                        // element lvalue with a real bounds check (negative
+                        // indexes normalized) instead of a raw data[i]
+                        "{}->data[still_soa_index({}, {}->len, __FILE__, __LINE__)]",
+                        b,
+                        i,
+                        b
+                    ),
+                    _ => format!("{}[{}]", self.place_deref_base(base), i),
+                }
+            }
             Place::SoaElem(base, name, idx) => {
                 let b = self.place_lvalue(base);
                 let i = self.emit_expr(idx);
@@ -1512,7 +1593,16 @@ impl Emitter {
                     _ => c.clone(),
                 }
             }
-            Place::Field(base, name) => format!("{}.{}", self.place_lvalue(base), name),
+            Place::Field(base, name) => {
+                let l = format!("{}.{}", self.place_lvalue(base), name);
+                // a field can hold the container itself (struct field of list
+                // type): hand back its data array for further subscripting
+                let ft = resolve_deep(&self.place_base_ty(&Place::Field(base.clone(), name.clone())));
+                match ft {
+                    Ty::List(_) => format!("{}->data", l),
+                    _ => l,
+                }
+            }
             Place::Index(base, idx) => format!("{}[{}]", self.place_deref_base(base), self.emit_expr(idx)),
             Place::SoaElem(base, name, idx) => self.place_lvalue(&Place::SoaElem(base.clone(), name.clone(), idx.clone())),
             Place::TupleIndex(base, i) => format!("{}.f{}", self.place_lvalue(base), i),
@@ -1830,6 +1920,72 @@ impl Emitter {
         }
     }
 
+    /// True when `f` is a method whose `self` param is passed by pointer
+    /// (non-SoA struct methods: field writes mutate the caller's value).
+    fn ptr_self_fn(&self, f: &CFunc) -> bool {
+        f.self_ty.is_some() && !f.params.is_empty() && f.params[0].0 == "self"
+    }
+
+    /// An lvalue C expression designating the struct storage behind `tx`, when
+    /// the whole chain is addressable (locals, globals, fields, list/dict
+    /// elements). Returns None for rvalues (literals, calls, temporaries).
+    fn recv_storage(&mut self, tx: &Tx) -> Option<String> {
+        match &tx.x {
+            X::Local(id) => {
+                if self.self_ptr == Some(*id) {
+                    Some(format!("(*{})", self.locals[*id as usize].cname))
+                } else {
+                    Some(self.locals[*id as usize].cname.clone())
+                }
+            }
+            X::Global(c) => Some(c.clone()),
+            X::Field(b, name) => {
+                let base = self.recv_storage(b)?;
+                Some(format!("{}.{}", base, name))
+            }
+            X::Index(b, ix) => {
+                let c = self.recv_storage(b)?;
+                let i = self.emit_expr(ix);
+                match resolve_deep(&b.ty) {
+                    Ty::List(_) => Some(format!(
+                        "{}->data[still_soa_index({}, {}->len, __FILE__, __LINE__)]",
+                        c, i, c
+                    )),
+                    Ty::Dict(k, v) => Some(format!(
+                        "(*still_dict_{}_{}_get_ptr({}, {}, __FILE__, __LINE__))",
+                        ty_tag(&resolve_deep(&k)),
+                        ty_tag(&resolve_deep(&v)),
+                        c,
+                        i
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Emit the C argument for a by-pointer `self` receiver: `&storage` when
+    /// the receiver is addressable, otherwise the address of an owned temp
+    /// (which the statement-end drop still releases correctly).
+    fn recv_arg(&mut self, recv: &Tx) -> String {
+        if let Some(storage) = self.recv_storage(recv) {
+            return format!("&{}", storage);
+        }
+        let e = self.emit_expr(recv);
+        let ty = resolve_deep(&recv.ty);
+        if self.is_temp(&e) {
+            return format!("&{}", e);
+        }
+        let t = self.newtmp();
+        self.set_line(&recv.span);
+        let ct = self.ctype(&ty);
+        let owned = self.adapt_owned(&e, &recv.ty, &ty);
+        self.line(format!("{} {} = {};", ct, t, owned));
+        self.reg_temp(&t, ty.clone());
+        format!("&{}", t)
+    }
+
     fn materialize_place_read(&mut self, base: &Place, bty: &Ty) -> String {
         if matches!(base, Place::Local(_) | Place::Global(_)) {
             return self.place_lvalue(base);
@@ -1989,7 +2145,13 @@ impl Emitter {
                 self.reg_temp(&t, Ty::Str);
                 t
             }
-            X::Local(id) => self.locals[*id as usize].cname.clone(),
+            X::Local(id) => {
+                if self.self_ptr == Some(*id) {
+                    format!("(*{})", self.locals[*id as usize].cname)
+                } else {
+                    self.locals[*id as usize].cname.clone()
+                }
+            }
             X::Global(c) => c.clone(),
             X::ListLit(items) => {
                 let ety = match resolve_deep(&tx.ty) {
@@ -2225,8 +2387,14 @@ impl Emitter {
             }
             X::CallFn(idx, args) => {
                 let f = self.prog.funcs[*idx].clone();
+                let ptr_self = self.ptr_self_fn(&f);
                 let mut adapted = Vec::new();
                 for (i, a) in args.iter().enumerate() {
+                    if i == 0 && ptr_self {
+                        // the receiver: passed by pointer, never adapted/cloned
+                        adapted.push(self.recv_arg(a));
+                        continue;
+                    }
                     let e = self.emit_expr(a);
                     let pty = resolve_deep(&f.params[i].1);
                     let aty = resolve_deep(&a.ty);

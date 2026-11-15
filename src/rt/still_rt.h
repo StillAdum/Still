@@ -259,11 +259,16 @@ static T still_list_##TAG##_get(still_list_##TAG* l, int64_t i, const char* file
     T _v = l->data[i]; \
     return CLONE; \
 } \
-static void still_list_##TAG##_set(still_list_##TAG* l, int64_t i, T _v, const char* file, int64_t line) { \
+static T* still_list_##TAG##_get_ptr(still_list_##TAG* l, int64_t i, const char* file, int64_t line) { \
     if (i < 0) i += l->len; \
     if (i < 0 || i >= l->len) still_panic(file, line, "index out of range"); \
-    { T _o = l->data[i]; (void)_o; RELEASE; } \
-    l->data[i] = _v; \
+    return &l->data[i]; \
+} \
+static void still_list_##TAG##_set(still_list_##TAG* l, int64_t i, T _nv, const char* file, int64_t line) { \
+    if (i < 0) i += l->len; \
+    if (i < 0 || i >= l->len) still_panic(file, line, "index out of range"); \
+    /* store the new value first, then release the old one: RELEASE binds _v */ \
+    { T _o = l->data[i]; l->data[i] = _nv; T _v = _o; (void)_v; RELEASE; } \
 } \
 static T still_list_##TAG##_pop(still_list_##TAG* l, const char* file, int64_t line) { \
     if (l->len == 0) still_panic(file, line, "cannot pop from an empty list"); \
@@ -377,11 +382,15 @@ static void still_dict_##KTAG##_##VTAG##_grow(still_dict_##KTAG##_##VTAG* d) { \
     d->cap = _nc; \
     d->used = d->len; \
 } \
-static void still_dict_##KTAG##_##VTAG##_set(still_dict_##KTAG##_##VTAG* d, CK _k, CV _v) { \
+static void still_dict_##KTAG##_##VTAG##_set(still_dict_##KTAG##_##VTAG* d, CK _k, CV _nv) { \
     int64_t _i = still_dict_##KTAG##_##VTAG##_find(d, _k); \
     if (_i >= 0) { \
-        CV _o = d->slots[_i].val; (void)_o; RELEASEV; \
-        d->slots[_i].val = _v; \
+        /* store the new value first, then release the old one: RELEASEV binds _v; \
+           the incoming key ref is not stored (the slot keeps its own) */ \
+        CV _o = d->slots[_i].val; \
+        d->slots[_i].val = _nv; \
+        { CV _v = _o; (void)_v; RELEASEV; } \
+        RELEASEK; \
         return; \
     } \
     if ((d->len + 1) * 10 >= d->cap * 7) { \
@@ -393,9 +402,14 @@ static void still_dict_##KTAG##_##VTAG##_set(still_dict_##KTAG##_##VTAG* d, CK _
     if (d->slots[_t].state == 2) d->used--; \
     d->slots[_t].state = 1; \
     d->slots[_t].key = _k; \
-    d->slots[_t].val = _v; \
+    d->slots[_t].val = _nv; \
     d->len++; \
     d->used++; \
+} \
+static CV* still_dict_##KTAG##_##VTAG##_get_ptr(still_dict_##KTAG##_##VTAG* d, CK _k, const char* file, int64_t line) { \
+    int64_t _i = still_dict_##KTAG##_##VTAG##_find(d, _k); \
+    if (_i < 0) still_panic(file, line, "missing key in dict"); \
+    return &d->slots[_i].val; \
 } \
 static CV still_dict_##KTAG##_##VTAG##_get(still_dict_##KTAG##_##VTAG* d, CK _k, const char* file, int64_t line) { \
     int64_t _i = still_dict_##KTAG##_##VTAG##_find(d, _k); \

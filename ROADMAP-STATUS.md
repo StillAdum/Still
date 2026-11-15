@@ -1,6 +1,8 @@
-# ROADMAP-STATUS — v0.4.0
+# ROADMAP-STATUS — v0.4.0 (+ v0.4.2 struct-mutation update)
 
-Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.4.0, November 2026. Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.
+Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.4.0, November 2026 (v0.4.2 update, November 2026). Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.
+
+> **v0.4.2 update (post-v0.4.0):** struct mutation semantics shipped — methods take `self` by pointer and mutate in place (`p.hurt(30)` works; the `p = p.hurt(30)` copy idiom is no longer required), list/dict element and field-of-element writes mutate real storage (`xs[0].hp = 7`, `d["a"].hurt(40)`), and `for e in list:` binds struct elements as in-place proxies. Two refcount bugs in the list/dict `_set` macros were found and fixed (released the new value instead of the old; leaked dict keys on update). Verified 56/56 conformance under tcc AND strict gcc, all examples, and the cornell-box render on the cross-compiled Windows exe. Generic types (item 2) and enums/traits (item 4) are next.
 
 ## Verdict in one paragraph
 
@@ -8,7 +10,7 @@ Still v0.4.0 is a working Phase-1–4 language with a real Phase-6 C-ABI hub, a 
 
 ## Phase 1: Front End — ✅ mostly shipped (for the implemented language)
 
-Shipped: hand-written lexer (indentation blocks, `{expr}` interpolation capture, spans), recursive-descent parser with error recovery, AST with spans, diagnostics with did-you-mean, name resolution + modules (`use`, aliases, embedded stdlib), type checker with full inference, implicit generics + monomorphization, `T?` nullable with flow-unwrap, `any` dynamic values (tagged runtime design: heterogeneous lists/dicts, runtime type dispatch, casts, `type_of`), `match` statements with literal/wildcard/binding patterns **and tuple/list destructuring** (nested patterns, wildcards mixed with literals, runtime list arity, fall-through), conformance suite (56 programs green on gcc + tcc, plus MSVC in release CI), parser fuzzer test in cargo test.
+Shipped: hand-written lexer (indentation blocks, `{expr}` interpolation capture, spans), recursive-descent parser with error recovery, AST with spans, diagnostics with did-you-mean, name resolution + modules (`use`, aliases, embedded stdlib), type checker with full inference, implicit generics + monomorphization, `T?` nullable with flow-unwrap, `any` dynamic values (tagged runtime design: heterogeneous lists/dicts, runtime type dispatch, casts, `type_of`), `match` statements with literal/wildcard/binding patterns **and tuple/list destructuring** (nested patterns, wildcards mixed with literals, runtime list arity, fall-through), conformance suite (56 programs green on gcc + tcc, plus MSVC in release CI), parser fuzzer test in cargo test. v0.4.2: struct mutation semantics — methods take `self` by pointer (field writes inside methods mutate the caller's value), element/field-of-element lvalues mutate real storage with bounds checks, struct loop elements bind in place.
 
 Not shipped (roadmap says build, we say deferred): formal EBNF grammar document; error codes and lint levels; traits/interfaces; enums/ADTs with pattern matching beyond tuple/list destructuring; **closures** (see Deferrals); const evaluation; a general attribute system (only `@soa` and `@export` exist); the 500-program conformance target (56 today); a 1-hour fuzzer run (cargo fuzz test is short).
 
@@ -20,7 +22,7 @@ Deferred (this is the phase's backbone): HIR/MIR/SSA + verifier; optimization pa
 
 ## Phase 3: Runtime and Memory — ⚠️ partial
 
-Shipped: refcounted runtime (strings/lists/dicts/SoA — Python sharing semantics, no GC pauses), panics with file:line, checked div/mod/index/overflow in debug, dynamic library loading at run time (the Python bridge's dlopen/LoadLibrary loader), `STILL_BREAKPOINTS` traps, and the tagged `still_any` runtime value backing the `any` type (boxable scalars and containers, per-type dispatch in the emitter, string `+=` folded to in-place appends on `any`-free paths).
+Shipped: refcounted runtime (strings/lists/dicts/SoA — Python sharing semantics, no GC pauses), panics with file:line, checked div/mod/index/overflow in debug, dynamic library loading at run time (the Python bridge's dlopen/LoadLibrary loader), `STILL_BREAKPOINTS` traps, and the tagged `still_any` runtime value backing the `any` type (boxable scalars and containers, per-type dispatch in the emitter, string `+=` folded to in-place appends on `any`-free paths). v0.4.2: fixed two refcount bugs in the list/dict `_set` macros (they released the incoming value instead of the stored one — refcount underflow with UAF potential — and leaked dict keys on update); element stores now release the old value correctly, and `_get_ptr` helpers enable in-place element mutation.
 
 Deferred: allocator trait/global swap, arena/bump/pool allocators; the `core`/`alloc`/`std` layer split (kernel work depends on it — therefore Phase 9 stays closed); replaceable panic handler; stack traces; destructors/`defer`/weak refs; sanitizer hooks; leak detector.
 

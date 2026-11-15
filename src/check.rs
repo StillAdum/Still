@@ -2420,7 +2420,11 @@ impl Checker {
             },
             None => Ty::Var(ret_cell.clone()),
         };
-        let self_ty = if fname.contains('.') {
+        // A method is only self-by-pointer when it actually takes a `self`
+        // param first; statics (Player.make()) share the dotted name but have
+        // no receiver.
+        let is_method = fname.contains('.') && !fd.params.is_empty() && fd.params[0].name == "self";
+        let self_ty = if is_method {
             let tname = fname.split('.').next().unwrap();
             self.short_types.get(key_mod).and_then(|s| s.get(tname)).cloned()
         } else {
@@ -2446,7 +2450,7 @@ impl Checker {
         });
         self.insts.insert(key, idx);
         let mut ctx = Ctx::new(key_mod.to_string(), true);
-        ctx.self_param = fname.contains('.') && !fd.params.is_empty() && fd.params[0].name == "self";
+        ctx.self_param = is_method;
         if fd.ret.is_some() {
             *ctx.ret.borrow_mut() = Some(ret.clone());
             ctx.ret_annotated = true;
