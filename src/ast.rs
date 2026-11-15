@@ -3,6 +3,22 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Map arbitrary characters to valid C identifier characters. Used for
+/// struct/function C names and for `ty_tag` of named types (generic
+/// instantiations contain '<' '>' ','). Injective: every output sequence
+/// decodes back to exactly one input string.
+pub fn sanitize(s: &str) -> String {
+    let mut out = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push_str(&format!("_u{:04x}_", ch as u32));
+        }
+    }
+    out
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypeAnnot {
     Int,
@@ -16,6 +32,9 @@ pub enum TypeAnnot {
     Nullable(Box<TypeAnnot>),
     Any,
     Named(String),
+    /// `SlotMap<int>` / `Result<int, str>` — a generic type with explicit
+    /// type arguments.
+    Generic(String, Vec<TypeAnnot>),
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +67,8 @@ pub struct Field {
 pub struct TypeDef {
     pub attrs: Vec<String>,
     pub name: String,
+    /// Type parameters: `type SlotMap<T>` -> ["T"]. Empty for plain types.
+    pub params: Vec<String>,
     pub fields: Vec<Field>,
     pub methods: Vec<FuncDef>,
     pub span: Span,
@@ -119,6 +140,8 @@ pub enum Expr {
     Index(Box<Expr>, Box<Expr>, Span),
     Slice(Box<Expr>, Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>, Span),
     Member(Box<Expr>, String, Span),
+    /// `x?` — runtime-checked unwrap of a nullable value (panics on none).
+    UnwrapQ(Box<Expr>, Span),
 }
 
 #[derive(Clone, Debug)]
@@ -219,7 +242,8 @@ impl Expr {
             | Expr::Call(_, _, s)
             | Expr::Index(_, _, s)
             | Expr::Slice(_, _, _, _, s)
-            | Expr::Member(_, _, s) => s.clone(),
+            | Expr::Member(_, _, s)
+            | Expr::UnwrapQ(_, s) => s.clone(),
         }
     }
 }
@@ -336,6 +360,8 @@ pub enum X {
     Builtin(Bi, Vec<Tx>),
     Method(Box<Tx>, String, Vec<Tx>),
     Index(Box<Tx>, Box<Tx>),
+    /// Runtime-checked unwrap of a nullable (panics on none).
+    CheckedUnwrap(Box<Tx>),
     Slice(Box<Tx>, Option<Box<Tx>>, Option<Box<Tx>>, Option<Box<Tx>>),
     Field(Box<Tx>, String),
     Unwrap(Box<Tx>),
@@ -504,6 +530,9 @@ pub struct StructInfo {
     pub methods: Vec<String>,
     pub statics: Vec<String>,
     pub exported: bool,
+    /// For instantiated generic types: the concrete type arguments, aligned
+    /// with the TypeDef's `params`. Empty for plain types.
+    pub ty_args: Vec<Ty>,
 }
 
 #[derive(Clone, Debug)]
@@ -546,7 +575,7 @@ pub fn ty_tag(t: &Ty) -> String {
             let parts: Vec<String> = ts.iter().map(ty_tag).collect();
             format!("T{}", parts.join("_"))
         }
-        Ty::Named(n) => n.replace("::", "__"),
+        Ty::Named(n) => sanitize(&n.replace("::", "__")),
         Ty::Never => "x".into(),
     }
 }
@@ -621,5 +650,162 @@ pub fn annot_to_ty(a: &TypeAnnot, structs: &HashMap<String, StructInfo>) -> Resu
                 return Err(format!("unknown type '{}'", n));
             }
         }
+        // Generic type args must go through the checker's resolver (it owns
+        // the TypeDef table and the instantiation cache). This context only
+        // sees fully substituted types.
+        TypeAnnot::Generic(n, _) => {
+            return Err(format!("type '{}' needs type arguments here (resolve generics through the checker)", n));
+        }
     })
+}
+
+/// Canonical string form of an annotation (user syntax). Used to carry
+/// generic type arguments from the parser into the checker through the
+/// callee-name string, and for type-arg error messages.
+pub fn annot_str(a: &TypeAnnot) -> String {
+    match a {
+        TypeAnnot::Int => "int".into(),
+        TypeAnnot::Float => "float".into(),
+        TypeAnnot::Bool => "bool".into(),
+        TypeAnnot::Str => "str".into(),
+        TypeAnnot::None => "none".into(),
+        TypeAnnot::Any => "any".into(),
+        TypeAnnot::List(e) => format!("[{}]", annot_str(e)),
+        TypeAnnot::Dict(k, v) => format!("{{{}: {}}}", annot_str(k), annot_str(v)),
+        TypeAnnot::Tuple(ts) => format!("({})", ts.iter().map(annot_str).collect::<Vec<_>>().join(", ")),
+        TypeAnnot::Nullable(b) => format!("{}?", annot_str(b)),
+        TypeAnnot::Named(n) => n.clone(),
+        TypeAnnot::Generic(n, args) => format!("{}<{}>", n, args.iter().map(annot_str).collect::<Vec<_>>().join(", ")),
+    }
+}
+
+/// Parse the canonical string form produced by `annot_str` back into a
+/// `TypeAnnot`. Returns None on malformed input (callers report the error).
+pub fn parse_annot_str(s: &str) -> Option<TypeAnnot> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut pos = 0usize;
+    let r = parse_annot_str_at(&chars, &mut pos)?;
+    if pos != chars.len() {
+        return None;
+    }
+    Some(r)
+}
+
+fn parse_annot_str_at(chars: &[char], pos: &mut usize) -> Option<TypeAnnot> {
+    skip_ws(chars, pos);
+    // [T]
+    if chars.get(*pos) == Some(&'[') {
+        *pos += 1;
+        let inner = parse_annot_str_at(chars, pos)?;
+        skip_ws(chars, pos);
+        if chars.get(*pos) != Some(&']') {
+            return None;
+        }
+        *pos += 1;
+        return with_nullable(chars, pos, TypeAnnot::List(Box::new(inner)));
+    }
+    // {K: V}
+    if chars.get(*pos) == Some(&'{') {
+        *pos += 1;
+        let k = parse_annot_str_at(chars, pos)?;
+        skip_ws(chars, pos);
+        if chars.get(*pos) != Some(&':') {
+            return None;
+        }
+        *pos += 1;
+        let v = parse_annot_str_at(chars, pos)?;
+        skip_ws(chars, pos);
+        if chars.get(*pos) != Some(&'}') {
+            return None;
+        }
+        *pos += 1;
+        return with_nullable(chars, pos, TypeAnnot::Dict(Box::new(k), Box::new(v)));
+    }
+    // (A, B) tuple
+    if chars.get(*pos) == Some(&'(') {
+        *pos += 1;
+        let mut parts = Vec::new();
+        skip_ws(chars, pos);
+        if chars.get(*pos) == Some(&')') {
+            *pos += 1;
+            return with_nullable(chars, pos, TypeAnnot::Tuple(parts));
+        }
+        loop {
+            parts.push(parse_annot_str_at(chars, pos)?);
+            skip_ws(chars, pos);
+            match chars.get(*pos) {
+                Some(',') => {
+                    *pos += 1;
+                }
+                Some(')') => {
+                    *pos += 1;
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        if parts.len() == 1 {
+            let inner = parts.pop().unwrap();
+            return with_nullable(chars, pos, inner);
+        }
+        return with_nullable(chars, pos, TypeAnnot::Tuple(parts));
+    }
+    // ident (possibly generic Name<...>)
+    let start = *pos;
+    while chars.get(*pos).map(|c| c.is_ascii_alphanumeric() || *c == '_').unwrap_or(false) {
+        *pos += 1;
+    }
+    if start == *pos {
+        return None;
+    }
+    let name: String = chars[start..*pos].iter().collect();
+    let base = match name.as_str() {
+        "int" => TypeAnnot::Int,
+        "float" => TypeAnnot::Float,
+        "bool" => TypeAnnot::Bool,
+        "str" => TypeAnnot::Str,
+        "none" => TypeAnnot::None,
+        "any" => TypeAnnot::Any,
+        _ => {
+            skip_ws(chars, pos);
+            if chars.get(*pos) == Some(&'<') {
+                *pos += 1;
+                let mut args = Vec::new();
+                loop {
+                    args.push(parse_annot_str_at(chars, pos)?);
+                    skip_ws(chars, pos);
+                    match chars.get(*pos) {
+                        Some(',') => {
+                            *pos += 1;
+                        }
+                        Some('>') => {
+                            *pos += 1;
+                            break;
+                        }
+                        _ => return None,
+                    }
+                }
+                TypeAnnot::Generic(name, args)
+            } else {
+                TypeAnnot::Named(name)
+            }
+        }
+    };
+    with_nullable(chars, pos, base)
+}
+
+fn with_nullable(chars: &[char], pos: &mut usize, base: TypeAnnot) -> Option<TypeAnnot> {
+    skip_ws(chars, pos);
+    if chars.get(*pos) == Some(&'?') {
+        *pos += 1;
+        Some(TypeAnnot::Nullable(Box::new(base)))
+    } else {
+        Some(base)
+    }
+}
+
+fn skip_ws(chars: &[char], pos: &mut usize) {
+    while chars.get(*pos).map(|c| c.is_whitespace()).unwrap_or(false) {
+        *pos += 1;
+    }
 }

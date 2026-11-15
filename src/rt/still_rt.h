@@ -61,6 +61,9 @@ typedef struct {
 
 void still_panic(const char* file, int64_t line, const char* msg);
 void still_check_fail(const char* file, int64_t line, const char* msg);
+/* Panics "unwrapped a none value" and never returns; the return value exists
+   so the caller can use it in a value context. */
+void* still_unwrap_none_panic(const char* file, int64_t line);
 void still_fail(still_str* msg, const char* file, int64_t line);
 void still_exit(int64_t code);
 

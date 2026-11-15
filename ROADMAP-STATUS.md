@@ -1,6 +1,8 @@
-# ROADMAP-STATUS — v0.4.0 (+ v0.4.2 struct-mutation update)
+# ROADMAP-STATUS — v0.4.0 (+ v0.4.2 struct-mutation, v0.4.3 generic-types updates)
 
-Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.4.0, November 2026 (v0.4.2 update, November 2026). Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.
+Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.4.0, November 2026 (v0.4.2 & v0.4.3 updates, November 2026). Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.
+
+> **v0.4.3 update (post-v0.4.2):** generic container types (`SlotMap<T>`, `Option<T>`, `Result<T,E>`, `Stack<T>`, `Queue<T>`) shipped in `containers` stdlib. Generic struct definitions (`type Foo<T>: ...`) monomorphize at use-site into mangled types (`Foo<i>`), with full method specialization (`Foo<i>.method`). Postfix unwrap `?` (`x?`) checked unwrap expression panics on None with line info. Fixed Windows-specific MinGW heap corruption / UAF bug in `emit_c.rs` `as_var`: materialized temporary variables for borrowed expressions (field/index reads) must not be registered with `reg_temp`, preventing double-release on self-referential assignments (`b.data = b.data[1:]`). Conformance suite updated to 59/59 programs green. Enums with payloads and traits (item 4) are next.
 
 > **v0.4.2 update (post-v0.4.0):** struct mutation semantics shipped — methods take `self` by pointer and mutate in place (`p.hurt(30)` works; the `p = p.hurt(30)` copy idiom is no longer required), list/dict element and field-of-element writes mutate real storage (`xs[0].hp = 7`, `d["a"].hurt(40)`), and `for e in list:` binds struct elements as in-place proxies. Two refcount bugs in the list/dict `_set` macros were found and fixed (released the new value instead of the old; leaked dict keys on update). Verified 56/56 conformance under tcc AND strict gcc, all examples, and the cornell-box render on the cross-compiled Windows exe. Generic types (item 2) and enums/traits (item 4) are next.
 
@@ -10,7 +12,7 @@ Still v0.4.0 is a working Phase-1–4 language with a real Phase-6 C-ABI hub, a 
 
 ## Phase 1: Front End — ✅ mostly shipped (for the implemented language)
 
-Shipped: hand-written lexer (indentation blocks, `{expr}` interpolation capture, spans), recursive-descent parser with error recovery, AST with spans, diagnostics with did-you-mean, name resolution + modules (`use`, aliases, embedded stdlib), type checker with full inference, implicit generics + monomorphization, `T?` nullable with flow-unwrap, `any` dynamic values (tagged runtime design: heterogeneous lists/dicts, runtime type dispatch, casts, `type_of`), `match` statements with literal/wildcard/binding patterns **and tuple/list destructuring** (nested patterns, wildcards mixed with literals, runtime list arity, fall-through), conformance suite (56 programs green on gcc + tcc, plus MSVC in release CI), parser fuzzer test in cargo test. v0.4.2: struct mutation semantics — methods take `self` by pointer (field writes inside methods mutate the caller's value), element/field-of-element lvalues mutate real storage with bounds checks, struct loop elements bind in place.
+Shipped: hand-written lexer (indentation blocks, `{expr}` interpolation capture, spans), recursive-descent parser with error recovery, AST with spans, diagnostics with did-you-mean, name resolution + modules (`use`, aliases, embedded stdlib), type checker with full inference, implicit generics + monomorphization, `T?` nullable with flow-unwrap, `any` dynamic values (tagged runtime design: heterogeneous lists/dicts, runtime type dispatch, casts, `type_of`), `match` statements with literal/wildcard/binding patterns **and tuple/list destructuring** (nested patterns, wildcards mixed with literals, runtime list arity, fall-through), conformance suite (59 programs green on gcc + tcc, plus MSVC in release CI), parser fuzzer test in cargo test. v0.4.2: struct mutation semantics — methods take `self` by pointer (field writes inside methods mutate the caller's value), element/field-of-element lvalues mutate real storage with bounds checks, struct loop elements bind in place. v0.4.3: generic struct types (`type Box<T>: ...`), postfix unwrap `x?`, `containers` stdlib module (`SlotMap<T>`, `Option<T>`, `Result<T,E>`, `Stack<T>`, `Queue<T>`).
 
 Not shipped (roadmap says build, we say deferred): formal EBNF grammar document; error codes and lint levels; traits/interfaces; enums/ADTs with pattern matching beyond tuple/list destructuring; **closures** (see Deferrals); const evaluation; a general attribute system (only `@soa` and `@export` exist); the 500-program conformance target (56 today); a 1-hour fuzzer run (cargo fuzz test is short).
 
@@ -91,7 +93,7 @@ The other v0.3 headline deferral, `any`, shipped in v0.4 as the tagged `still_an
 
 | Roadmap exit criterion | Status |
 | --- | --- |
-| Phase 1: 500-program conformance, 1h fuzzer | ❌ 56 programs, short fuzzer |
+| Phase 1: 500-program conformance, 1h fuzzer | ❌ 59 programs, short fuzzer |
 | Phase 2: native exes on 3 OSes, debugger steps | ⚠️ exes on Windows/Linux via C toolchains; macOS untested; stepping deferred |
 | Phase 3: freestanding program, custom entry/panic | ❌ |
 | Phase 4: 90% coverage, bench suite, doc-tests | ❌ partial (bench gate only) |

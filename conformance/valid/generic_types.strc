@@ -1,0 +1,56 @@
+use containers
+
+type Player:
+    name: str
+    hp: int
+
+sm = SlotMap<int>()
+a = sm.insert(10)
+b = sm.insert(20)
+sm.set(a, 99)
+sm.remove(a)
+print(sm.get(b))
+print(sm.count())
+print(sm.has(a))
+print(sm.has(b))
+
+team = SlotMap<Player>()
+p = team.insert(Player("aria", 100))
+q = team.insert(Player("bo", 80))
+pl = team.get(q)
+print(pl.name)
+team.set(p, Player("cid", 55))
+print(team.get(p).hp)
+
+r = Result<int, str>.make_ok(42)
+e = Result<int, str>.make_err("boom")
+print(r.unwrap())
+print(e.unwrap_err())
+print(r.is_ok())
+print(e.is_err())
+print(r.expect("value"))
+
+o1 = Option<int>(4)
+o2 = Option<int>()
+print(o1.unwrap())
+print(o1.is_some())
+print(o2.is_none())
+
+st = Stack<str>()
+st.push("a")
+st.push("b")
+print(st.pop())
+
+qu = Queue<int>()
+qu.push(1)
+qu.push(2)
+print(qu.pop())
+print(qu.pop())
+
+pv: int? = 7
+print(pv?)
+sv: str? = "hi"
+print(sv? + "!")
+
+vals = sm.items()
+print(len(vals))

@@ -932,6 +932,14 @@ impl Emitter {
         let eqf = self.eq_fn(&i);
         code.push_str(&format!("    return {}(a.v, b.v);\n", eqf));
         code.push_str(&format!("}}\n"));
+        code.push_str(&format!(
+            "static {ct} still_opt_{tag}_unwrap(still_opt_{tag} p, const char* file, int64_t line) {{\n",
+            ct = ct,
+            tag = tag
+        ));
+        code.push_str(&format!("    if (!p.has) still_panic(file, line, \"unwrapped a none value\");\n"));
+        code.push_str(&format!("    return p.v;\n"));
+        code.push_str(&format!("}}\n"));
         self.helpers.push(code);
     }
 
@@ -1527,9 +1535,11 @@ impl Emitter {
         let t = self.newtmp();
         let ct = self.ctype(&ty);
         self.line(format!("{} {} = {};", ct, t, expr));
-        if self.ty_has_refs(&ty) {
-            self.reg_temp(&t, ty.clone());
-        }
+        // The materialized temp is a BORROW of the source expression (field
+        // and index reads yield pointers without a reference; owned rvalues
+        // always self-register their own temps instead). Never register it:
+        // a statement-end release here would free storage owned elsewhere —
+        // `b.data = b.data[1:]` used to double-release the old list this way.
         t
     }
 
@@ -2621,6 +2631,27 @@ impl Emitter {
                         match i {
                             Ty::Str | Ty::List(_) | Ty::Dict(..) => e,
                             _ => format!("{}.v", e),
+                        }
+                    }
+                    _ => e,
+                }
+            }
+            X::CheckedUnwrap(v) => {
+                // `x?` — like Unwrap, but with a runtime panic on none.
+                let e = self.emit_expr(v);
+                let vty = resolve_deep(&v.ty);
+                match &vty {
+                    Ty::Nullable(inner) => {
+                        let i = resolve_deep(inner);
+                        match i {
+                            Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => {
+                                let ct = self.ctype(&i);
+                                format!("({} != 0 ? {} : ({})still_unwrap_none_panic(__FILE__, __LINE__))", e, e, ct)
+                            }
+                            _ => {
+                                self.need_opt(&i);
+                                format!("still_opt_{}_unwrap({}, __FILE__, __LINE__)", ty_tag(&i), e)
+                            }
                         }
                     }
                     _ => e,

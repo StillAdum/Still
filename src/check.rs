@@ -33,6 +33,14 @@ struct Ctx {
     /// binder names declare arm-locals even at top level, where ordinary
     /// fresh assignments become module globals.
     pat_binders: HashSet<String>,
+    /// Qual of the generic instantiation whose method body is being checked
+    /// (e.g. "m::SlotMap<i>"); bare constructor calls to the owner type
+    /// inside the body resolve to this.
+    owner_inst: Option<String>,
+    /// Type-parameter substitution in scope for generic method bodies:
+    /// param names and the concrete types they stand for.
+    ty_params: Vec<String>,
+    ty_args: Vec<Ty>,
 }
 
 impl Ctx {
@@ -51,6 +59,9 @@ impl Ctx {
             depth: 0,
             global_names: HashSet::new(),
             pat_binders: HashSet::new(),
+            owner_inst: None,
+            ty_params: Vec::new(),
+            ty_args: Vec::new(),
         }
     }
 
@@ -86,6 +97,10 @@ pub struct Checker {
     pcache: HashMap<FKey, (Vec<Option<Ty>>, Vec<Option<Tx>>)>,
     gmap: HashMap<(String, String), String>,
     init_order: Vec<String>,
+    /// Instantiated generic types by (module, short name): "SlotMap<i>" -> qual.
+    inst_by_name: HashMap<(String, String), String>,
+    /// Generic-struct instantiation depth guard (nested type args).
+    inst_depth: u32,
 }
 
 pub fn check_program(mods: Vec<ModSrc>, main_module: &str, debug: bool) -> (Program, Vec<Diag>) {
@@ -104,23 +119,15 @@ pub fn check_program(mods: Vec<ModSrc>, main_module: &str, debug: bool) -> (Prog
         pcache: HashMap::new(),
         gmap: HashMap::new(),
         init_order: Vec::new(),
+        inst_by_name: HashMap::new(),
+        inst_depth: 0,
     };
     c.prog.debug = debug;
     c.run(mods, main_module);
     (c.prog, c.diags)
 }
 
-pub fn sanitize(s: &str) -> String {
-    let mut out = String::new();
-    for ch in s.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            out.push(ch);
-        } else {
-            out.push_str(&format!("_u{:04x}_", ch as u32));
-        }
-    }
-    out
-}
+pub use crate::ast::sanitize;
 
 impl Checker {
     fn run(&mut self, mods: Vec<ModSrc>, main_module: &str) {
@@ -253,6 +260,12 @@ impl Checker {
         for qual in &quals {
             let td = self.types[qual].clone();
             let module = qual.split("::").next().unwrap().to_string();
+            if !td.params.is_empty() {
+                // Generic type defs get no StructInfo until instantiated with
+                // concrete type args (instantiate_struct); bare use is an
+                // arity error.
+                continue;
+            }
             self.prog.structs.insert(
                 qual.clone(),
                 StructInfo {
@@ -264,16 +277,20 @@ impl Checker {
                     methods: Vec::new(),
                     statics: Vec::new(),
                     exported: td.attrs.iter().any(|a| a == "export"),
+                    ty_args: Vec::new(),
                 },
             );
         }
         for qual in &quals {
             let td = self.types[qual].clone();
             let module = qual.split("::").next().unwrap().to_string();
+            if !td.params.is_empty() {
+                continue; // generic: fields and methods resolve per instantiation
+            }
             let mut fields: Vec<(String, Ty)> = Vec::new();
             let mut defaults: Vec<Option<Tx>> = Vec::new();
             for f in &td.fields {
-                let ty = match annot_to_ty(&f.annot, &self.prog.structs) {
+                let ty = match self.annot_ty_in(&module, &f.annot, &f.span) {
                     Ok(t) => t,
                     Err(m) => {
                         self.diags.push(err(&f.span, m));
@@ -331,6 +348,7 @@ impl Checker {
                     methods,
                     statics,
                     exported: td.attrs.iter().any(|a| a == "export"),
+                    ty_args: Vec::new(),
                 },
             );
         }
@@ -360,6 +378,299 @@ impl Checker {
         }
         seen.remove(qual);
         None
+    }
+
+    /// Qual of a type by (module, short name): non-generic types come from
+    /// short_types, instantiated generics from inst_by_name.
+    fn type_qual_of(&self, module: &str, tname: &str) -> Option<String> {
+        if let Some(q) = self.short_types.get(module).and_then(|s| s.get(tname)) {
+            return Some(q.clone());
+        }
+        self.inst_by_name.get(&(module.to_string(), tname.to_string())).cloned()
+    }
+
+    /// Find a generic type def by short name visible from `module` (own
+    /// module first, then `use`d modules). Returns (module, qual, typedef).
+    fn find_type(&self, module: &str, name: &str) -> Option<(String, String, TypeDef)> {
+        if let Some(q) = self.short_types.get(module).and_then(|s| s.get(name)) {
+            if let Some(td) = self.types.get(q) {
+                return Some((module.to_string(), q.clone(), td.clone()));
+            }
+        }
+        if let Some(als) = self.aliases.get(module) {
+            for target in als.values() {
+                if let Some(q) = self.short_types.get(target).and_then(|s| s.get(name)) {
+                    if let Some(td) = self.types.get(q) {
+                        return Some((target.clone(), q.clone(), td.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve an annotation to a Ty in the context of `module`, with an
+    /// optional type-parameter substitution (generic method bodies and field
+    /// types of generic instantiations). Instantiates nested generic types
+    /// on demand.
+    fn annot_ty_subst(&mut self, module: &str, a: &TypeAnnot, params: &[String], args: &[Ty], sp: &Span) -> Result<Ty, String> {
+        match a {
+            TypeAnnot::Int => Ok(Ty::Int),
+            TypeAnnot::Float => Ok(Ty::Float),
+            TypeAnnot::Bool => Ok(Ty::Bool),
+            TypeAnnot::Str => Ok(Ty::Str),
+            TypeAnnot::None => Ok(Ty::NoneTy),
+            TypeAnnot::Any => Ok(Ty::Any),
+            TypeAnnot::List(e) => Ok(Ty::List(Rc::new(self.annot_ty_subst(module, e, params, args, sp)?))),
+            TypeAnnot::Dict(k, v) => Ok(Ty::Dict(
+                Rc::new(self.annot_ty_subst(module, k, params, args, sp)?),
+                Rc::new(self.annot_ty_subst(module, v, params, args, sp)?),
+            )),
+            TypeAnnot::Tuple(ts) => Ok(Ty::Tuple(Rc::new(
+                ts.iter().map(|t| self.annot_ty_subst(module, t, params, args, sp)).collect::<Result<_, _>>()?,
+            ))),
+            TypeAnnot::Nullable(b) => {
+                let inner = self.annot_ty_subst(module, b, params, args, sp)?;
+                if matches!(inner, Ty::Any) {
+                    return Err("'any?' is not needed; any can already hold none".into());
+                }
+                Ok(Ty::Nullable(Box::new(inner)))
+            }
+            TypeAnnot::Named(n) => {
+                if let Some(i) = params.iter().position(|p| p == n) {
+                    return Ok(args[i].clone());
+                }
+                // A bare generic type name without args is an arity error.
+                if let Some((_, q, td)) = self.find_type(module, n) {
+                    if !td.params.is_empty() {
+                        return Err(format!(
+                            "type '{}' takes {} type argument(s) — write {}<{}>",
+                            n,
+                            td.params.len(),
+                            n,
+                            td.params.join(", ")
+                        ));
+                    }
+                    let _ = q;
+                }
+                annot_to_ty(&TypeAnnot::Named(n.clone()), &self.prog.structs)
+            }
+            TypeAnnot::Generic(name, sub) => {
+                let (tmod, _q, td) = self
+                    .find_type(module, name)
+                    .ok_or_else(|| format!("unknown type '{}'", name))?;
+                if td.params.is_empty() {
+                    return Err(format!("type '{}' is not generic; write {} instead of {}<...>", name, name, name));
+                }
+                if sub.len() != td.params.len() {
+                    return Err(format!(
+                        "type '{}' takes {} type argument(s), got {}",
+                        name,
+                        td.params.len(),
+                        sub.len()
+                    ));
+                }
+                let mut arg_tys = Vec::new();
+                for sa in sub {
+                    arg_tys.push(self.annot_ty_subst(module, sa, params, args, sp)?);
+                }
+                match self.instantiate_struct(&tmod, name, &arg_tys, sp) {
+                    Some(key) => Ok(Ty::Named(key)),
+                    None => Err(format!("cannot instantiate type '{}'", name)),
+                }
+            }
+        }
+    }
+
+    /// Module-context annotation resolution with no type parameters in scope.
+    fn annot_ty_in(&mut self, module: &str, a: &TypeAnnot, sp: &Span) -> Result<Ty, String> {
+        self.annot_ty_subst(module, a, &[], &[], sp)
+    }
+
+    /// Convert a resolved Ty back into an annotation (for registering
+    /// per-instantiation methods with substituted param/ret types).
+    /// None for inference-only types (Var/Never) — the param stays inferred.
+    fn annot_of_ty(&self, t: &Ty) -> Option<TypeAnnot> {
+        match resolve(t) {
+            Ty::Int => Some(TypeAnnot::Int),
+            Ty::Float => Some(TypeAnnot::Float),
+            Ty::Bool => Some(TypeAnnot::Bool),
+            Ty::Str => Some(TypeAnnot::Str),
+            Ty::NoneTy => Some(TypeAnnot::None),
+            Ty::Any => Some(TypeAnnot::Any),
+            Ty::List(e) => Some(TypeAnnot::List(Box::new(self.annot_of_ty(&e)?))),
+            Ty::Dict(k, v) => Some(TypeAnnot::Dict(Box::new(self.annot_of_ty(&k)?), Box::new(self.annot_of_ty(&v)?))),
+            Ty::Tuple(ts) => Some(TypeAnnot::Tuple(
+                ts.iter().map(|t| self.annot_of_ty(t)).collect::<Option<Vec<_>>>()?,
+            )),
+            Ty::Nullable(b) => Some(TypeAnnot::Nullable(Box::new(self.annot_of_ty(&b)?))),
+            Ty::Named(q) => Some(TypeAnnot::Named(q.clone())),
+            Ty::Var(_) | Ty::Never => None,
+        }
+    }
+
+    /// Instantiate a generic type with concrete type args, producing (and
+    /// caching) a concrete StructInfo plus per-instantiation methods. Returns
+    /// the instantiated qual, e.g. "m::SlotMap<i>".
+    fn instantiate_struct(&mut self, tmod: &str, name: &str, arg_tys: &[Ty], sp: &Span) -> Option<String> {
+        if self.inst_depth > 32 {
+            self.diags.push(err(sp, "generic type instantiation nested too deeply".into()));
+            return None;
+        }
+        let qual = format!("{}::{}", tmod, name);
+        let td = match self.types.get(&qual) {
+            Some(t) if !t.params.is_empty() => t.clone(),
+            _ => {
+                self.diags.push(err(sp, format!("unknown generic type '{}'", name)));
+                return None;
+            }
+        };
+        if td.is_soa() {
+            self.diags.push(err(sp, "@soa types cannot have type parameters".into()));
+            return None;
+        }
+        if arg_tys.len() != td.params.len() {
+            self.diags.push(err(sp, format!("type '{}' takes {} type argument(s), got {}", name, td.params.len(), arg_tys.len())));
+            return None;
+        }
+        let tags: Vec<String> = arg_tys.iter().map(ty_tag).collect();
+        let key = format!("{}::{}<{}>", tmod, name, tags.join(","));
+        if self.prog.structs.contains_key(&key) {
+            return Some(key);
+        }
+        let short_inst = format!("{}<{}>", name, tags.join(","));
+        self.inst_depth += 1;
+        let mut fields: Vec<(String, Ty)> = Vec::new();
+        let mut defaults: Vec<Option<Tx>> = Vec::new();
+        let mut methods: Vec<String> = Vec::new();
+        let mut statics: Vec<String> = Vec::new();
+        let mut ok = true;
+        for f in &td.fields {
+            let ty = match self.annot_ty_subst(tmod, &f.annot, &td.params, arg_tys, sp) {
+                Ok(t) => t,
+                Err(m) => {
+                    self.diags.push(err(&f.span, m));
+                    ok = false;
+                    Ty::Int
+                }
+            };
+            if td.is_soa() && !matches!(resolve(&ty), Ty::Int | Ty::Float | Ty::Bool | Ty::Str) {
+                self.diags.push(err(&f.span, format!("@soa fields must be int, float, bool or str; field '{}' is {}", f.name, ty_name(&ty))));
+            }
+            let d = match &f.default {
+                Some(dexpr) => match self.const_eval(dexpr) {
+                    Some(cv) => {
+                        if assign_ok(&cv.ty, &ty).is_some() || coerce_holes(&cv.ty, &ty) {
+                            Some(cv)
+                        } else if is_empty_literal(dexpr) {
+                            // An empty list/dict default unifies with the
+                            // field's concrete type.
+                            Some(Tx { ty: ty.clone(), span: f.span.clone(), x: empty_literal_x(&ty) })
+                        } else {
+                            self.diags.push(err(&f.span, format!("default for field '{}' does not match its type {}", f.name, ty_name(&ty))));
+                            None
+                        }
+                    }
+                    None => {
+                        self.diags.push(err(&f.span, "field defaults must be constants".into()));
+                        None
+                    }
+                },
+                None => None,
+            };
+            fields.push((f.name.clone(), ty));
+            defaults.push(d);
+        }
+        // Insert the (still method-less) instantiation BEFORE registering its
+        // methods: a method signature may reference the owner type itself
+        // (`func make_ok(v: T) -> Result<T, E>`), whose substitution re-enters
+        // instantiate_struct for this same key and must hit the cache. The
+        // completed method lists are patched back in below.
+        self.prog.structs.insert(
+            key.clone(),
+            StructInfo {
+                module: tmod.to_string(),
+                name: short_inst.clone(),
+                fields,
+                defaults,
+                is_soa: false,
+                methods: Vec::new(),
+                statics: Vec::new(),
+                exported: td.attrs.iter().any(|a| a == "export"),
+                ty_args: arg_tys.to_vec(),
+            },
+        );
+        self.inst_by_name.insert((tmod.to_string(), short_inst.clone()), key.clone());
+        // Per-instantiation methods: params/ret substituited to the concrete
+        // types so the ordinary param_info/instantiate machinery handles them.
+        for m in &td.methods {
+            let mkey = format!("{}.{}", short_inst, m.name);
+            if self.funcs.contains_key(&(tmod.to_string(), mkey.clone())) {
+                self.diags.push(err(&m.span, format!("method '{}' is already defined for type '{}'", m.name, short_inst)));
+                continue;
+            }
+            let mut sm = m.clone();
+            let mut m_ok = true;
+            for p in &mut sm.params {
+                if let Some(a) = p.annot.clone() {
+                    match self.annot_ty_subst(tmod, &a, &td.params, arg_tys, sp) {
+                        Ok(t) => {
+                            let kept = if p.name == "self" { Some(a) } else { self.annot_of_ty(&t) };
+                            p.annot = kept;
+                        }
+                        Err(ms) => {
+                            self.diags.push(err(&p.span, ms));
+                            m_ok = false;
+                        }
+                    }
+                }
+            }
+            if let Some(ra) = m.ret.clone() {
+                match self.annot_ty_subst(tmod, &ra, &td.params, arg_tys, sp) {
+                    Ok(t) => {
+                        let rt = resolve_deep(&t);
+                        sm.ret = self.annot_of_ty(&rt);
+                        if sm.ret.is_none() {
+                            // keep inference (no annotation)
+                        }
+                    }
+                    Err(ms) => {
+                        self.diags.push(err(&m.span, ms));
+                        m_ok = false;
+                    }
+                }
+            }
+            if !m_ok {
+                ok = false;
+                // Do not register a method whose substituted signature is
+                // broken; the primary diagnostic above already fired.
+                continue;
+            }
+            self.funcs.insert((tmod.to_string(), mkey.clone()), Rc::new(sm));
+            self.fn_order.push((tmod.to_string(), mkey.clone()));
+            if m.params.is_empty() || m.params[0].name != "self" {
+                statics.push(mkey);
+            } else {
+                methods.push(mkey);
+            }
+        }
+        // Patch the instantiation with its completed method lists.
+        if let Some(si) = self.prog.structs.get_mut(&key) {
+            si.methods = methods;
+            si.statics = statics;
+        }
+        if ok {
+            let mut seen = HashSet::new();
+            if let Some(bad) = self.struct_cycle(&key, &mut seen) {
+                self.diags.push(err(&td.span, format!("type '{}' contains itself by value through field '{}' (use a list or dict to break the cycle)", short_inst, bad)));
+            }
+        }
+        self.inst_depth -= 1;
+        if ok {
+            Some(key)
+        } else {
+            None
+        }
     }
 
     fn order_modules(&mut self, main_module: &str) {
@@ -455,7 +766,7 @@ impl Checker {
                     }
                 }
             } else {
-                p.annot.as_ref().and_then(|a| annot_to_ty(a, &self.prog.structs).ok())
+                p.annot.as_ref().and_then(|a| self.annot_ty_in(module, a, &p.span).ok())
             };
             if ty.is_some() && p.default.is_some() {
                 let cv = self.const_eval(p.default.as_ref().unwrap());
@@ -864,6 +1175,24 @@ impl Checker {
                 }
             }
             Expr::Member(obj, name, _) => self.infer_member(ctx, obj, name, &sp, false),
+            Expr::UnwrapQ(inner, _) => {
+                let it = self.infer(ctx, inner)?;
+                let vt = resolve_deep(&it.ty);
+                match vt {
+                    Ty::Nullable(b) => {
+                        let inner_ty = resolve_deep(&b);
+                        if matches!(inner_ty, Ty::NoneTy) {
+                            self.diags.push(err(&sp, "'none?' unwraps to none; the value is always none".into()));
+                            return None;
+                        }
+                        Some(Tx { ty: inner_ty, span: sp, x: X::CheckedUnwrap(Box::new(it)) })
+                    }
+                    other => {
+                        self.diags.push(err(&sp, format!("'?' unwraps a nullable value, got {} (which is never none)", ty_name(&other))));
+                        None
+                    }
+                }
+            }
         }
     }
 
@@ -1423,7 +1752,15 @@ impl Checker {
                 if self.funcs.contains_key(&(module.clone(), name.clone())) {
                     return self.call_fn(ctx, &module, name, ax, sp);
                 }
+                if name.contains('<') {
+                    return self.generic_ctor_call(ctx, name, ax, sp);
+                }
                 if let Some(qual) = self.short_types.get(&module).and_then(|s| s.get(name)).cloned() {
+                    // A generic type reached without type args: inside one of
+                    // its own method bodies this means the owner instantiation.
+                    if let Some(key) = self.owner_ctor(ctx, &module, name, sp) {
+                        return self.ctor(&key, ax, sp);
+                    }
                     return self.ctor(&qual, ax, sp);
                 }
                 if self.externs.contains_key(name) {
@@ -1469,6 +1806,63 @@ impl Checker {
                 if let Expr::Ident(base, _) = obj.as_ref() {
                     let module = ctx.module.clone();
                     if ctx.lookup(base).is_none() {
+                        // Static method on an instantiated generic type:
+                        // SlotMap<int>.new() — the parser encodes the type
+                        // args into the base ident string.
+                        if base.contains('<') {
+                            let ga = match parse_annot_str(base) {
+                                Some(TypeAnnot::Generic(b, args)) => Some((b, args)),
+                                Some(other) => {
+                                    self.diags.push(err(msp, format!("'{}' is not a generic type", annot_str(&other))));
+                                    return None;
+                                }
+                                None => {
+                                    self.diags.push(err(msp, format!("malformed type arguments in '{}'", base)));
+                                    return None;
+                                }
+                            };
+                            if let Some((gbase, argannots)) = ga {
+                                let (tmod, _q, td) = match self.find_type(&module, &gbase) {
+                                    Some(t) => t,
+                                    None => {
+                                        self.diags.push(err(msp, format!("unknown type '{}'", gbase)));
+                                        return None;
+                                    }
+                                };
+                                if td.params.is_empty() {
+                                    self.diags.push(err(msp, format!("type '{}' is not generic; write {} instead of {}<...>", gbase, gbase, gbase)));
+                                    return None;
+                                }
+                                let mut arg_tys = Vec::new();
+                                for sa in &argannots {
+                                    match self.annot_ty_subst(&module, sa, &ctx.ty_params, &ctx.ty_args, msp) {
+                                        Ok(t) => arg_tys.push(t),
+                                        Err(m) => {
+                                            self.diags.push(err(msp, m));
+                                            return None;
+                                        }
+                                    }
+                                }
+                                let key = match self.instantiate_struct(&tmod, &gbase, &arg_tys, msp) {
+                                    Some(k) => k,
+                                    None => return None,
+                                };
+                                let si = self.prog.structs.get(&key).cloned();
+                                if let Some(si) = si {
+                                    let mkey = format!("{}.{}", si.name, mname);
+                                    if self.funcs.contains_key(&(si.module.clone(), mkey.clone())) {
+                                        let mut ax = Vec::new();
+                                        for a in args {
+                                            ax.push(self.infer(ctx, a)?);
+                                        }
+                                        return self.call_fn(ctx, &si.module, &mkey, ax, sp);
+                                    }
+                                    self.diags.push(err(msp, format!("type '{}' has no static method '{}' (static methods are callable on the type name directly)", si.name, mname)));
+                                    return None;
+                                }
+                                return None;
+                            }
+                        }
                         // Static method on a type itself: Length.from_km(5.0).
                         // The type may be local or come from a `use`d module.
                         let mut qual: Option<(String, String)> = None;
@@ -1616,11 +2010,91 @@ impl Checker {
         Some(Tx { ty: ret, span: sp.clone(), x: X::CallExtern(name.to_string(), args) })
     }
 
+    /// Resolve the callee name `SlotMap<int>` (parser-encoded in the ident
+    /// string) to an instantiated type and build its constructor call.
+    fn generic_ctor_call(&mut self, ctx: &mut Ctx, name: &str, ax: Vec<Tx>, sp: &Span) -> Option<Tx> {
+        let a = match parse_annot_str(name) {
+            Some(a) => a,
+            None => {
+                self.diags.push(err(sp, format!("malformed type arguments in '{}'", name)));
+                return None;
+            }
+        };
+        let (base, argannots) = match a {
+            TypeAnnot::Generic(b, args) => (b, args),
+            other => {
+                self.diags.push(err(sp, format!("'{}' is not a generic type", annot_str(&other))));
+                return None;
+            }
+        };
+        let (tmod, _q, td) = match self.find_type(&ctx.module, &base) {
+            Some(t) => t,
+            None => {
+                self.diags.push(err(sp, format!("unknown type '{}'", base)));
+                return None;
+            }
+        };
+        if td.params.is_empty() {
+            self.diags.push(err(sp, format!("type '{}' is not generic; write {} instead of {}<...>", base, base, base)));
+            return None;
+        }
+        let mut arg_tys = Vec::new();
+        for sa in &argannots {
+            match self.annot_ty_subst(&ctx.module, sa, &ctx.ty_params, &ctx.ty_args, sp) {
+                Ok(t) => arg_tys.push(t),
+                Err(m) => {
+                    self.diags.push(err(sp, m));
+                    return None;
+                }
+            }
+        }
+        let key = match self.instantiate_struct(&tmod, &base, &arg_tys, sp) {
+            Some(k) => k,
+            None => return None,
+        };
+        self.ctor(&key, ax, sp)
+    }
+
+    /// Inside a generic type's own method body, a bare constructor call of
+    /// the owner type (`SlotMap()`) refers to the current instantiation.
+    fn owner_ctor(&mut self, ctx: &Ctx, module: &str, name: &str, sp: &Span) -> Option<String> {
+        let td = match self.find_type(module, name) {
+            Some((tmod, _q, td)) if !td.params.is_empty() => (tmod, td),
+            _ => return None,
+        };
+        let owner = ctx.owner_inst.as_ref()?;
+        let si = self.prog.structs.get(owner)?;
+        let base = si.name.split('<').next().unwrap_or(&si.name).to_string();
+        if base == name && si.module == td.0 {
+            Some(owner.clone())
+        } else {
+            self.diags.push(err(sp, format!("type '{}' takes {} type argument(s) — write {}<...> or call it inside one of its own methods", name, td.1.params.len(), name)));
+            None
+        }
+    }
+
     fn ctor(&mut self, qual: &str, args: Vec<Tx>, sp: &Span) -> Option<Tx> {
         let si = self.prog.structs.get(qual).cloned();
         let si = match si {
             Some(s) => s,
             None => {
+                // A bare generic type def has no StructInfo until
+                // instantiated — that is an arity error, not an unknown type.
+                if let Some(td) = self.types.get(qual) {
+                    if !td.params.is_empty() {
+                        self.diags.push(err(
+                            sp,
+                            format!(
+                                "type '{}' takes {} type argument(s) — write {}<{}>",
+                                td.name,
+                                td.params.len(),
+                                td.name,
+                                td.params.join(", ")
+                            ),
+                        ));
+                        return None;
+                    }
+                }
                 self.diags.push(err(sp, format!("unknown type '{}'", qual)));
                 return None;
             }
@@ -2236,8 +2710,26 @@ fn mangle_cname(module: &str, fname: &str, tys: &[Ty], generic: bool, attrs: &[S
     }
 }
 
-fn has_break(stmts: &[CS]) -> bool {
-    for s in stmts {
+/// True when `e` is an empty list or dict literal (their type is fully
+/// determined by the destination).
+fn is_empty_literal(e: &Expr) -> bool {
+    match e {
+        Expr::ListLit(v, _) => v.is_empty(),
+        Expr::DictLit(v, _) => v.is_empty(),
+        _ => false,
+    }
+}
+
+/// Empty container literal of a concrete type (used to coerce empty-literal
+/// field defaults to the instantiated field type).
+fn empty_literal_x(ty: &Ty) -> X {
+    match resolve(ty) {
+        Ty::Dict(..) => X::DictLit(Vec::new()),
+        _ => X::ListLit(Vec::new()),
+    }
+}
+
+fn has_break(stmts: &[CS]) -> bool {    for s in stmts {
         match s {
             CS::Break(_) => return true,
             CS::If { then, els, .. } => {
@@ -2373,8 +2865,12 @@ impl Checker {
                             key_tys.push(resolve(&args[i].ty));
                         } else {
                             let tname = fname.split('.').next().unwrap();
-                            let qual = self.short_types.get(key_mod).and_then(|s| s.get(tname)).cloned().map(Ty::Named).unwrap_or(Ty::NoneTy);
-                            key_tys.push(qual);
+                            // type_qual_of covers plain types (short_types)
+                            // and instantiated generic types (inst_by_name);
+                            // the eager stdlib typecheck calls methods with
+                            // no receiver, so self comes from the name.
+                            let qual = self.type_qual_of(key_mod, tname);
+                            key_tys.push(qual.map(Ty::Named).unwrap_or(Ty::NoneTy));
                         }
                     } else if eager {
                         self.diags.push(err(sp, format!("internal: eager check of generic '{}'", fname)));
@@ -2411,7 +2907,7 @@ impl Checker {
         }
         let ret_cell: VarCell = Rc::new(std::cell::RefCell::new(None));
         let ret = match &fd.ret {
-            Some(a) => match annot_to_ty(a, &self.prog.structs) {
+            Some(a) => match self.annot_ty_in(key_mod, a, &fd.span) {
                 Ok(t) => t,
                 Err(m) => {
                     self.diags.push(err(&fd.span, m));
@@ -2422,11 +2918,12 @@ impl Checker {
         };
         // A method is only self-by-pointer when it actually takes a `self`
         // param first; statics (Player.make()) share the dotted name but have
-        // no receiver.
+        // no receiver. Owner lookup covers instantiated generic types too
+        // ("SlotMap<i>" lives in inst_by_name, not short_types).
         let is_method = fname.contains('.') && !fd.params.is_empty() && fd.params[0].name == "self";
         let self_ty = if is_method {
             let tname = fname.split('.').next().unwrap();
-            self.short_types.get(key_mod).and_then(|s| s.get(tname)).cloned()
+            self.type_qual_of(key_mod, tname)
         } else {
             None
         };
@@ -2451,6 +2948,23 @@ impl Checker {
         self.insts.insert(key, idx);
         let mut ctx = Ctx::new(key_mod.to_string(), true);
         ctx.self_param = is_method;
+        // Inside a per-instantiation generic method body, bare constructor
+        // calls to the owner type resolve to this instantiation, and explicit
+        // `SlotMap<T>`-style args substitute T.
+        if fname.contains('.') {
+            let tname = fname.split('.').next().unwrap();
+            if let Some(q) = self.inst_by_name.get(&(key_mod.to_string(), tname.to_string())).cloned() {
+                if let Some(si) = self.prog.structs.get(&q) {
+                    let base_name = tname.split('<').next().unwrap().to_string();
+                    let base_qual = format!("{}::{}", key_mod, base_name);
+                    if let Some(td) = self.types.get(&base_qual) {
+                        ctx.owner_inst = Some(q.clone());
+                        ctx.ty_params = td.params.clone();
+                        ctx.ty_args = si.ty_args.clone();
+                    }
+                }
+            }
+        }
         if fd.ret.is_some() {
             *ctx.ret.borrow_mut() = Some(ret.clone());
             ctx.ret_annotated = true;
@@ -3288,7 +3802,7 @@ impl Checker {
                     return Some(());
                 }
                 if let Some(a) = annot {
-                    let aty = match annot_to_ty(a, &self.prog.structs) {
+                    let aty = match self.annot_ty_in(&ctx.module, a, nsp) {
                         Ok(t) => t,
                         Err(m) => {
                             self.diags.push(err(nsp, m));

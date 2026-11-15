@@ -25,6 +25,11 @@ void still_check_fail(const char* file, int64_t line, const char* msg) {
     abort();
 }
 
+void* still_unwrap_none_panic(const char* file, int64_t line) {
+    still_panic(file, line, "unwrapped a none value");
+    return 0; /* unreachable */
+}
+
 void still_fail(still_str* msg, const char* file, int64_t line) {
     fflush(stdout);
     fprintf(stderr, "%s:%lld: fail: %.*s\n", file, (long long)line, (int)msg->len, msg->bytes);

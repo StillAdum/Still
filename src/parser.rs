@@ -69,6 +69,80 @@ impl Parser {
         self.diags.push(err(span, msg));
     }
 
+    /// Consume one closing '>' of a generic argument list. The lexer emits
+    /// '>>' as a single RSr token, so nested generic args (`SlotMap<list<int>>`)
+    /// split it: RSr is rewritten to one '>' and left in place to be consumed
+    /// by the next closer.
+    fn expect_gt(&mut self, what: &str) -> Option<()> {
+        match &self.cur().tok {
+            Tok::P(crate::lexer::P::Gt) => {
+                self.bump();
+                Some(())
+            }
+            Tok::P(crate::lexer::P::RSr) => {
+                let sp = self.cur().span.clone();
+                self.toks[self.pos] = Token { tok: Tok::P(crate::lexer::P::Gt), span: sp };
+                Some(())
+            }
+            other => {
+                self.error(&self.cur().span, format!("expected '>' to close {} type arguments, found {}", what, tok_str(other)));
+                None
+            }
+        }
+    }
+
+    /// Speculative parse of `Name<type, ...>` when seen in expression
+    /// position: commits only when the closer is followed by '(' (generic
+    /// constructor) or '.' (static method on an instantiated generic type).
+    /// Otherwise the position is restored and the '<' is a comparison.
+    fn try_generic_qualifier(&mut self, e: Expr) -> Option<Expr> {
+        let n = match &e {
+            Expr::Ident(n, _) => n.clone(),
+            _ => return None,
+        };
+        let save_pos = self.pos;
+        let save_diags = self.diags.len();
+        self.bump(); // '<'
+        let mut annots = Vec::new();
+        loop {
+            match self.parse_annot() {
+                Some(a) => annots.push(a),
+                None => {
+                    self.pos = save_pos;
+                    self.diags.truncate(save_diags);
+                    return None;
+                }
+            }
+            match self.cur().tok.clone() {
+                Tok::P(crate::lexer::P::Comma) => {
+                    self.bump();
+                }
+                Tok::P(crate::lexer::P::Gt) | Tok::P(crate::lexer::P::RSr) => break,
+                _ => {
+                    self.pos = save_pos;
+                    self.diags.truncate(save_diags);
+                    return None;
+                }
+            }
+        }
+        if self.expect_gt("type").is_none() {
+            self.pos = save_pos;
+            self.diags.truncate(save_diags);
+            return None;
+        }
+        let commit = matches!(
+            self.cur().tok,
+            Tok::P(crate::lexer::P::LP) | Tok::P(crate::lexer::P::Dot)
+        );
+        if !commit {
+            self.pos = save_pos;
+            self.diags.truncate(save_diags);
+            return None;
+        }
+        let sp = e.span();
+        Some(Expr::Ident(format!("{}<{}>", n, annots.iter().map(annot_str).collect::<Vec<_>>().join(", ")), sp))
+    }
+
     fn sync_stmt(&mut self) {
         loop {
             match &self.cur().tok {
@@ -307,6 +381,36 @@ impl Parser {
                 return None;
             }
         };
+        // Generic type parameters: type SlotMap<T>: / type Result<K, V>:
+        let mut params: Vec<String> = Vec::new();
+        if matches!(self.cur().tok, Tok::P(crate::lexer::P::Lt)) {
+            self.bump();
+            loop {
+                match self.cur().tok.clone() {
+                    Tok::Ident(p) => {
+                        self.bump();
+                        params.push(p);
+                    }
+                    other => {
+                        self.error(&self.cur().span, format!("expected a type parameter name in '{}<...>', found {}", name, tok_str(&other)));
+                        return None;
+                    }
+                }
+                match self.cur().tok.clone() {
+                    Tok::P(crate::lexer::P::Comma) => {
+                        self.bump();
+                    }
+                    Tok::P(crate::lexer::P::Gt) | Tok::P(crate::lexer::P::RSr) => break,
+                    other => {
+                        self.error(&self.cur().span, format!("expected ',' or '>' in the type parameters of '{}', found {}", name, tok_str(&other)));
+                        return None;
+                    }
+                }
+            }
+            if self.expect_gt(&name).is_none() {
+                return None;
+            }
+        }
         if !matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
             self.error(&self.cur().span, format!("expected ':' after type name '{}'", name));
             return None;
@@ -379,6 +483,7 @@ impl Parser {
         Some(TypeDef {
             attrs,
             name,
+            params,
             fields,
             methods,
             span: sp,
@@ -1347,6 +1452,14 @@ impl Parser {
     fn parse_postfix(&mut self) -> Option<Expr> {
         let mut e = self.parse_primary()?;
         loop {
+            if matches!(self.cur().tok, Tok::P(crate::lexer::P::Lt)) {
+                // `Name<...>(...)` generic constructor or `Name<...>.static()`
+                // — only commits when '(' or '.' follows the '>'.
+                if let Some(g) = self.try_generic_qualifier(e.clone()) {
+                    e = g;
+                    continue;
+                }
+            }
             match self.cur().tok {
                 Tok::P(crate::lexer::P::LP) => {
                     let sp = e.span();
@@ -1436,6 +1549,12 @@ impl Parser {
                             return None;
                         }
                     }
+                }
+                Tok::P(crate::lexer::P::Question) => {
+                    // x? — checked unwrap of a nullable value
+                    let sp = e.span();
+                    self.bump();
+                    e = Expr::UnwrapQ(Box::new(e), sp);
                 }
                 _ => break,
             }
@@ -1644,15 +1763,41 @@ impl Parser {
         let base = match self.cur().tok.clone() {
             Tok::Ident(n) => {
                 self.bump();
-                match n.as_str() {
+                let base = match n.as_str() {
                     "int" => TypeAnnot::Int,
                     "float" => TypeAnnot::Float,
                     "bool" => TypeAnnot::Bool,
                     "str" => TypeAnnot::Str,
                     "none" => TypeAnnot::None,
                     "any" => TypeAnnot::Any,
-                    _ => TypeAnnot::Named(n),
-                }
+                    _ => {
+                        // Generic type args: SlotMap<int>, Result<int, str>.
+                        if matches!(self.cur().tok, Tok::P(crate::lexer::P::Lt)) {
+                            self.bump();
+                            let mut args = Vec::new();
+                            loop {
+                                args.push(self.parse_annot()?);
+                                match self.cur().tok.clone() {
+                                    Tok::P(crate::lexer::P::Comma) => {
+                                        self.bump();
+                                    }
+                                    Tok::P(crate::lexer::P::Gt) | Tok::P(crate::lexer::P::RSr) => break,
+                                    other => {
+                                        self.error(&self.cur().span, format!("expected ',' or '>' in type arguments of '{}', found {}", n, tok_str(&other)));
+                                        return None;
+                                    }
+                                }
+                            }
+                            if self.expect_gt(&n).is_none() {
+                                return None;
+                            }
+                            TypeAnnot::Generic(n, args)
+                        } else {
+                            TypeAnnot::Named(n)
+                        }
+                    }
+                };
+                base
             }
             Tok::P(crate::lexer::P::LB) => {
                 self.bump();

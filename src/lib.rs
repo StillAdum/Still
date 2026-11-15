@@ -64,6 +64,7 @@ pub const STD_SERVER: &str = include_str!("stdlib/server.strc");
 pub const STD_ANALYTICS: &str = include_str!("stdlib/analytics.strc");
 pub const STD_ANTIDDOS: &str = include_str!("stdlib/antiddos.strc");
 pub const STD_PY: &str = include_str!("stdlib/py.strc");
+pub const STD_CONTAINERS: &str = include_str!("stdlib/containers.strc");
 
 pub fn std_modules() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -85,6 +86,7 @@ pub fn std_modules() -> Vec<(&'static str, &'static str)> {
         ("serialize", STD_SERIALIZE),
         ("dsl", STD_DSL),
         ("units", STD_UNITS),
+        ("containers", STD_CONTAINERS),
         ("fixed", STD_FIXED),
         ("undo", STD_UNDO),
         ("reactive", STD_REACTIVE),

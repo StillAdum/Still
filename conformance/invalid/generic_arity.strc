@@ -1,0 +1,4 @@
+use containers
+
+m = SlotMap<int, str>()
+print(m.count())

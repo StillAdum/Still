@@ -1,0 +1,159 @@
+# containers — generic container types (SlotMap, Option, Result, Stack, Queue).
+#
+# These use Still's generic type parameters: `type SlotMap<T>` declares T, and
+# every use fixes it with concrete type args (`SlotMap<int>`, `Result<int, str>`).
+# Each use compiles its own copy of the type and its methods, so values stay
+# fully typed end to end (no `any`, no casts, no runtime tags).
+#
+# Note: plain `T?` nullables are the language-native option type — `v: int?`
+# already gives Option<int> semantics (`is not none` tests, `v?` unwraps with
+# a checked panic). `Option<T>` below is provided as an explicit wrapper for
+# code that wants to name the type.
+
+type Option<T>:
+    value: T? = none
+
+    func is_some(self) -> bool:
+        return self.value is not none
+
+    func is_none(self) -> bool:
+        return self.value is none
+
+    func unwrap(self) -> T:
+        return self.value?
+
+    func expect(self, msg: str) -> T:
+        if self.value is none:
+            fail(msg)
+        return self.value?
+
+type Result<T, E>:
+    # Either a value (ok = true) or an error (ok = false). The unused side
+    # stays none. Build with Result<T, E>.make_ok(v) / .make_err(e).
+    ok: bool
+    value: T?
+    err: E?
+
+    func is_ok(self) -> bool:
+        return self.ok
+
+    func is_err(self) -> bool:
+        return not self.ok
+
+    func unwrap(self) -> T:
+        if not self.ok:
+            fail("Result.unwrap: called on an error result")
+        return self.value?
+
+    func unwrap_err(self) -> E:
+        if self.ok:
+            fail("Result.unwrap_err: called on an ok result")
+        return self.err?
+
+    func expect(self, msg: str) -> T:
+        if not self.ok:
+            fail(msg + ": " + str(self.err?))
+        return self.value?
+
+    func make_ok(v: T) -> Result<T, E>:
+        return Result<T, E>(true, v, none)
+
+    func make_err(e: E) -> Result<T, E>:
+        return Result<T, E>(false, none, e)
+
+type SlotMap<T>:
+    # Stable-key map from int keys to values of type T. Keys are never reused
+    # after remove(), so keys stored elsewhere stay valid. keys[] is the
+    # inverse map (value index -> key), slots[] the forward map (key -> value
+    # index, -1 = removed).
+    keys: [int] = []
+    slots: [int] = []
+    values: [T] = []
+
+    func has(self, key: int) -> bool:
+        return key >= 0 and key < len(self.slots) and self.slots[key] >= 0
+
+    func insert(self, v: T) -> int:
+        self.values.push(v)
+        key = len(self.slots)
+        self.keys.push(key)
+        self.slots.push(len(self.values) - 1)
+        return key
+
+    func get(self, key: int) -> T:
+        if not self.has(key):
+            fail("SlotMap.get: invalid key " + str(key))
+        return self.values[self.slots[key]]
+
+    func set(self, key: int, v: T):
+        if not self.has(key):
+            fail("SlotMap.set: invalid key " + str(key))
+        self.values[self.slots[key]] = v
+
+    func count(self) -> int:
+        return len(self.values)
+
+    func items(self) -> [T]:
+        return self.values
+
+    func remove(self, key: int):
+        if not self.has(key):
+            return
+        di = self.slots[key]
+        last = len(self.values) - 1
+        if di != last:
+            self.values[di] = self.values[last]
+            moved_key = self.keys[last]
+            self.keys[di] = moved_key
+            self.slots[moved_key] = di
+        self.values.pop()
+        self.keys.pop()
+        self.slots[key] = -1
+
+type Stack<T>:
+    data: [T] = []
+
+    func push(self, v: T):
+        self.data.push(v)
+
+    func pop(self) -> T:
+        if len(self.data) == 0:
+            fail("Stack.pop: stack is empty")
+        return self.data.pop()
+
+    func peek(self) -> T:
+        if len(self.data) == 0:
+            fail("Stack.peek: stack is empty")
+        return self.data[len(self.data) - 1]
+
+    func is_empty(self) -> bool:
+        return len(self.data) == 0
+
+    func count(self) -> int:
+        return len(self.data)
+
+type Queue<T>:
+    # Plain list-backed queue; pop is O(n) (slice reassign) which is fine for
+    # the small queues this targets. Deque-style ring buffer is a follow-up.
+    data: [T] = []
+
+    func push(self, v: T):
+        self.data.push(v)
+
+    func pop(self) -> T:
+        if len(self.data) == 0:
+            fail("Queue.pop: queue is empty")
+        v = self.data[0]
+        self.data = self.data[1:]
+        return v
+
+    func peek(self) -> T:
+        if len(self.data) == 0:
+            fail("Queue.peek: queue is empty")
+        return self.data[0]
+
+    func is_empty(self) -> bool:
+        return len(self.data) == 0
+
+    func count(self) -> int:
+        return len(self.data)

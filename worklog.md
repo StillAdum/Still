@@ -219,17 +219,34 @@ cargo test --release
 - Known remaining gaps (candidates for follow-up): deeply nested chains (`xss[i][j].f`) bounds-check only the innermost level; nested dict-field writes work but share the same shape.
 - LESSONS: Still has **no `func main`** — top-level statements are the program; a `func main():` block compiles as a never-called function (silent rc=0). Constructor args are positional only. Struct field defaults must be constants (`Item()` in a default is an error). Range loops are `for i in range(n)`. `gh codespace cp` needs `-e` or scp fails with quoted remote paths; PowerShell eats `$?` in double-quoted remote commands — single quotes only.
 
+## v0.4.3 session log (generic container types — the user's roadmap item 2; all compile work in the Linux Codespace)
+
+- Design & Architecture:
+  - Generic struct definitions: `type SlotMap<T>:`, `type Option<T>:`, `type Result<T, E>:` in `stdlib/containers.strc`.
+  - Type definitions track type parameters `TypeDef.params: Vec<String>`. Type annotations support `TypeAnnot::Generic(Box<TypeAnnot>, Vec<TypeAnnot>)` or parsed ident qualification.
+  - Lexer/Parser: `>>` token splitting via `expect_gt` in type arguments and generic qualifiers; `try_generic_qualifier` allows `Option<int>.make_some(...)` or `SlotMap<str>()` construction.
+  - Checker: Instantiates generic structs at use sites via `instantiate_struct`. Monomorphized struct names become `m::SlotMap<i>`, `m::Option<s>`, etc., using `ty_tag`.
+  - Methods on generic types: `mkey = format!("{}.{}", inst_name, m.name)` registered into `fmap` per type instantiation with type substitution on parameter and return annotations.
+  - Receiver resolution in eager typecheck: used `type_qual_of` so receiver method calls on instantiated generic types resolve correctly across modules.
+  - Static constructors: `Result<T, E>` uses static methods `Result<T, E>.make_ok(v)` / `make_err(e)` to circumvent implicit generic return type inference limits.
+  - Postfix checked unwrap operator `?`: parsed as `Expr::UnwrapQ(expr)` / checked as `X::CheckedUnwrap`. Panics with file:line via `still_unwrap_none_panic` if unwrapping None/uninitialized.
+  - Critical Memory Safety / UAF Fix in `emit_c.rs`:
+    - Fixed a Windows-specific MinGW heap corruption (`0xC0000374`) in `as_var`: materialized temporary variables for borrowed expressions (e.g. field/index reads like `b.data[1:]` in `Queue.pop`) must NOT be registered with `reg_temp`. Registering borrowed temps caused double-free/UAF when reassigning `b.data = b.data[1:]`.
+- Verification:
+  - Conformance suite: 3 new tests (`conformance/valid/generic_types.strc`, `conformance/invalid/generic_arity.strc`, `conformance/invalid/generic_bare.strc`).
+  - Total 59/59 conformance tests pass on both Linux tcc and strict gcc 14.
+  - Probes `pg1_slotmap`, `pg2_result`, `pg3_unwrapq`, `pg4_panic`, `pg5_bool` and all 5 showcase examples green.
+  - Cross-compiled Windows binary `still_new.exe` verified on Windows without heap corruption.
+
 ## Next steps (priority order)
 
-0. DONE (struct mutation session above): methods mutate `self` in place; list/dict element + field-of-element writes; `for e in list` in-place proxies. Next language work follows the user's ordered list below.
-1. **Generic container types** (`SlotMap<T>`, `Option<T>`, `Result<T,E>`): monomorphization already exists for functions; needs generic type defs flowing through check.rs instantiate + emit registry keys. Design the storage/keying story before touching the emitter.
-2. **Enums with payloads + traits** (the user's item 4, before closures): tagged-union runtime representation compatible with refcounting; trait methods lower to the existing by-pointer method mechanism with a vtable or per-type dispatch decision to be designed first.
-3. Closures: capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures. (The smaller first step — function values via a Ty::Func variant with per-instantiation static dispatch — is designed in ROADMAP-STATUS; it is type-system core work, schedule it as its own session.)
-4. Match follow-ups: struct patterns + exhaustiveness (tuple/list landed in v0.4.0; contains-based scalar lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
-5. Threading design (design doc before code — the user ordered design-first), then real benchmarks for the rendering engine (cornell baseline: 0.321 Mray/s, 692 s for the standard scene — plenty of headroom) and a cheap stepping debugger.
-6. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces). Includes the Qt-like GUI library the user asked for — design it on top of the existing gui.strc command model.
-7. `still fmt` / REPL / package manager; C-header binding generator (user items 9–10).
-8. Conformance growth toward 500 (56 today).
-9. LSP follow-ups: cross-module completion and references (single-file references/rename shipped in v0.4.0).
-10. String-fold follow-up: add a string-building bench to the CI gate so `+=` folding has a regression number (fold evidence is documented in RELEASE_NOTES for v0.4.0).
-11. Known v0.4 shape worth revisiting: match towers clone the remaining arms into every else level (tree grows with the product of earlier arms' test levels) — fine at current sizes, revisit if big matches appear. Also: deeply nested `xss[i][j].f` chains bounds-check only the innermost level (struct-mutation session note).
+0. DONE (item 1 & 2): methods mutate `self` in place; in-place element writes; loop proxies; generic containers (`SlotMap<T>`, `Option<T>`, `Result<T,E>`, `Stack<T>`, `Queue<T>`), postfix unwrap `?`, `as_var` borrow-temp UAF fix.
+1. **Enums with payloads + traits** (the user's item 4, before closures): tagged-union runtime representation compatible with refcounting; pattern matching on enum variants with payloads; trait definitions with method signatures, struct implementation of traits (`impl Trait for Struct`), and trait object / dynamic dispatch or static monomorphization.
+2. Closures: capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures.
+3. Match follow-ups: struct patterns + exhaustiveness (tuple/list landed in v0.4.0; contains-based scalar lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
+4. Threading design (design doc before code — the user ordered design-first), then real benchmarks for the rendering engine (cornell baseline: 0.321 Mray/s, 692 s for the standard scene — plenty of headroom) and a cheap stepping debugger.
+5. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces). Includes the Qt-like GUI library the user asked for — design it on top of the existing gui.strc command model.
+6. `still fmt` / REPL / package manager; C-header binding generator (user items 9–10).
+7. Conformance growth toward 500 (59 today).
+8. LSP follow-ups: cross-module completion and references (single-file references/rename shipped in v0.4.0).
+9. String-fold follow-up: add a string-building bench to the CI gate so `+=` folding has a regression number (fold evidence is documented in RELEASE_NOTES for v0.4.0).
