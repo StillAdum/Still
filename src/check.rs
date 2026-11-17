@@ -129,6 +129,12 @@ pub fn check_program(mods: Vec<ModSrc>, main_module: &str, debug: bool) -> (Prog
 
 pub use crate::ast::sanitize;
 
+/// C field name of an enum payload slot: `v_{Variant}_{index}`. Kept
+/// variant-prefixed so every payload slot is a unique struct field.
+pub fn enum_payload_field(variant: &str, index: usize) -> String {
+    format!("v_{}_{}", variant, index)
+}
+
 impl Checker {
     fn run(&mut self, mods: Vec<ModSrc>, main_module: &str) {
         for m in mods {
@@ -199,7 +205,11 @@ impl Checker {
                 }
             }
         }
+        self.collect_traits();
+        self.collect_enums();
         self.collect_structs();
+        self.collect_enums();
+        self.collect_impls();
         if !self.diags.is_empty() {
             return;
         }
@@ -380,6 +390,340 @@ impl Checker {
         None
     }
 
+    /// Register every enum definition: pass 1 inserts the EnumInfo with the
+    /// variant NAMES only (payload types resolved in pass 2), so struct
+    /// fields may reference enums; pass 2 resolves payload annotations
+    /// against the full struct registry, so enum payloads may be structs.
+    fn collect_enums(&mut self) {
+        let mod_names: Vec<String> = self.mods.keys().cloned().collect();
+        for m in &mod_names {
+            let stmts = self.mods[m].clone();
+            for s in &stmts {
+                let ed = match s {
+                    Stmt::EnumDef(e) => e,
+                    _ => continue,
+                };
+                let qual = format!("{}::{}", m, ed.name);
+                if self.prog.enums.contains_key(&qual) {
+                    continue; // pass 1 already registered this enum
+                }
+                if self.short_types.get(m).map(|t| t.contains_key(&ed.name)).unwrap_or(false) {
+                    self.diags.push(err(&ed.span, format!("'{}' is already defined in this module", ed.name)));
+                    continue;
+                }
+                self.prog.enums.insert(
+                    qual.clone(),
+                    EnumInfo {
+                        module: m.clone(),
+                        name: ed.name.clone(),
+                        variants: Vec::new(),
+                        exported: false,
+                    },
+                );
+            }
+        }
+        for m in &mod_names {
+            let stmts = self.mods[m].clone();
+            for s in &stmts {
+                let ed = match s {
+                    Stmt::EnumDef(e) => e,
+                    _ => continue,
+                };
+                let qual = format!("{}::{}", m, ed.name);
+                let mut variants: Vec<(String, Vec<Ty>)> = Vec::new();
+                for v in &ed.variants {
+                    let mut pts = Vec::new();
+                    for pa in &v.payloads {
+                        match self.annot_ty_in(m, pa, &v.span) {
+                            Ok(t) => pts.push(t),
+                            Err(msg) => {
+                                self.diags.push(err(&v.span, format!("payload of variant '{}' in enum '{}': {}", v.name, ed.name, msg)));
+                                pts.push(Ty::Int);
+                            }
+                        }
+                    }
+                    variants.push((v.name.clone(), pts));
+                }
+                if let Some(ei) = self.prog.enums.get_mut(&qual) {
+                    ei.variants = variants;
+                    ei.exported = false;
+                }
+            }
+        }
+    }
+
+    /// Find an enum by short name visible from `module` (own module first,
+    /// then `use`d modules). Returns (module, qual).
+    fn find_enum(&self, module: &str, name: &str) -> Option<(String, String)> {
+        if let Some(q) = self.prog.enums.keys().find(|q| {
+            let m = q.split("::").next().unwrap();
+            let n = q.split("::").nth(1).unwrap_or("");
+            m == module && n == name
+        }) {
+            return Some((module.to_string(), q.clone()));
+        }
+        if let Some(als) = self.aliases.get(module) {
+            for target in als.values() {
+                if let Some(q) = self.prog.enums.keys().find(|q| {
+                    let m = q.split("::").next().unwrap();
+                    let n = q.split("::").nth(1).unwrap_or("");
+                    m == *target && n == name
+                }) {
+                    return Some((target.clone(), q.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Register every trait definition with resolved method signatures.
+    /// Trait bodies are signature-only; registration happens before struct
+    /// collection so impls (which need both) can follow.
+    fn collect_traits(&mut self) {
+        let mod_names: Vec<String> = self.mods.keys().cloned().collect();
+        for m in &mod_names {
+            let stmts = self.mods[m].clone();
+            for s in &stmts {
+                let td = match s {
+                    Stmt::TraitDef(t) => t,
+                    _ => continue,
+                };
+                let qual = format!("{}::{}", m, td.name);
+                if self.types.contains_key(&qual) {
+                    self.diags.push(err(&td.span, format!("'{}' is already defined as a type in this module", td.name)));
+                    continue;
+                }
+                if self.prog.enums.contains_key(&qual) {
+                    self.diags.push(err(&td.span, format!("'{}' is already defined as an enum in this module", td.name)));
+                    continue;
+                }
+                let mut methods: Vec<(String, bool, Vec<Ty>, Option<Ty>)> = Vec::new();
+                for f in &td.methods {
+                    let mut pts: Vec<Ty> = Vec::new();
+                    for p in f.params.iter().skip(1) {
+                        match self.annot_ty_in(m, p.annot.as_ref().unwrap(), &f.span) {
+                            Ok(t) => pts.push(t),
+                            Err(msg) => {
+                                self.diags.push(err(&f.span, format!("trait '{}': {}", td.name, msg)));
+                                pts.push(Ty::Int);
+                            }
+                        }
+                    }
+                    let ret = match &f.ret {
+                        Some(a) => match self.annot_ty_in(m, a, &f.span) {
+                            Ok(t) => Some(t),
+                            Err(msg) => {
+                                self.diags.push(err(&f.span, format!("trait '{}': {}", td.name, msg)));
+                                None
+                            }
+                        },
+                        None => None,
+                    };
+                    let has_self = !f.params.is_empty() && f.params[0].name == "self";
+                    methods.push((f.name.clone(), has_self, pts, ret));
+                }
+                self.prog.traits.insert(
+                    qual.clone(),
+                    TraitInfo {
+                        module: m.clone(),
+                        name: td.name.clone(),
+                        methods,
+                        span: td.span.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Find a trait by short name visible from `module`.
+    fn find_trait(&self, module: &str, name: &str) -> Option<String> {
+        let own = format!("{}::{}", module, name);
+        if self.prog.traits.contains_key(&own) {
+            return Some(own);
+        }
+        if let Some(als) = self.aliases.get(module) {
+            for target in als.values() {
+                let q = format!("{}::{}", target, name);
+                if self.prog.traits.contains_key(&q) {
+                    return Some(q);
+                }
+            }
+        }
+        None
+    }
+
+    /// Validate every `impl Trait for Type` and register its methods as real
+    /// struct methods (static dispatch): the same registration a type's own
+    /// methods get. Impls must live in the method-lookup module of the type
+    /// (its own), and cover every trait method with a signature match.
+    fn collect_impls(&mut self) {
+        let mod_names: Vec<String> = self.mods.keys().cloned().collect();
+        for m in &mod_names {
+            let stmts = self.mods[m].clone();
+            for s in &stmts {
+                let id = match s {
+                    Stmt::ImplDef(i) => i,
+                    _ => continue,
+                };
+                let tq = match self.find_trait(m, &id.name) {
+                    Some(q) => q,
+                    None => {
+                        self.diags.push(err(&id.span, format!("unknown trait '{}'", id.name)));
+                        continue;
+                    }
+                };
+                // The trait must belong to this module: impls extend the
+                // type's own method registry, keyed by its module.
+                if !tq.starts_with(&format!("{}::", m)) {
+                    self.diags.push(err(&id.span, format!("trait '{}' is defined in another module; impls must be in the trait's module", id.name)));
+                    continue;
+                }
+                let ti = self.prog.traits[&tq].clone();
+                // The type must be a non-generic struct of this module.
+                let tq_td = match self.find_type(m, &id.for_type) {
+                    Some((tm, qual, td)) if tm == *m => {
+                        if !td.params.is_empty() {
+                            self.diags.push(err(&id.span, format!("impls are not supported for generic type '{}' (instantiate it first)", id.for_type)));
+                            continue;
+                        }
+                        (qual, td)
+                    }
+                    Some((_, _, _)) => {
+                        self.diags.push(err(&id.span, format!("impls must be in the same module as type '{}'", id.for_type)));
+                        continue;
+                    }
+                    None => {
+                        self.diags.push(err(&id.span, format!("unknown type '{}'", id.for_type)));
+                        continue;
+                    }
+                };
+                let (qual, td) = tq_td;
+                if self.prog.enums.contains_key(&qual) {
+                    self.diags.push(err(&id.span, format!("impls are not supported for enums ('{}' is an enum)", id.for_type)));
+                    continue;
+                }
+                // Every trait method must be implemented exactly once, with a
+                // matching signature; extra methods are rejected.
+                let mut covered: HashSet<String> = HashSet::new();
+                for im in &id.methods {
+                    let sig = ti.methods.iter().find(|(n, _, _, _)| n == &im.name);
+                    let sig = match sig {
+                        Some(s) => s,
+                        None => {
+                            let known: Vec<String> = ti.methods.iter().map(|(n, _, _, _)| n.clone()).collect();
+                            let hint = did_you_mean(&im.name, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
+                            self.diags.push(err(&im.span, format!("method '{}' is not declared in trait '{}'{}", im.name, ti.name, hint)));
+                            continue;
+                        }
+                    };
+                    if !covered.insert(im.name.clone()) {
+                        continue; // duplicate impl method: caught below
+                    }
+                    // Method-ness and arity must agree with the trait.
+                    let im_self = !im.params.is_empty() && im.params[0].name == "self";
+                    if im_self != sig.1 {
+                        self.diags.push(err(
+                            &im.span,
+                            format!(
+                                "method '{}' does not match trait '{}': the impl {} self but the trait {}",
+                                im.name,
+                                ti.name,
+                                if im_self { "takes" } else { "does not take" },
+                                if sig.1 { "does" } else { "does not" }
+                            ),
+                        ));
+                        continue;
+                    }
+                    let want_len = sig.2.len() + if im_self { 1 } else { 0 };
+                    if im.params.len() != want_len {
+                        self.diags.push(err(
+                            &im.span,
+                            format!(
+                                "method '{}' does not match trait '{}': takes {} parameter(s) (self included) but the trait declares {}",
+                                im.name, ti.name, im.params.len(), want_len
+                            ),
+                        ));
+                        continue;
+                    }
+                    // Signature types must match (self is skipped on both).
+                    let mut sig_ok = true;
+                    let off = if im_self { 1 } else { 0 };
+                    for (i, p) in im.params.iter().enumerate().skip(off) {
+                        let pa = match &p.annot {
+                            Some(a) => a,
+                            None => {
+                                self.diags.push(err(&p.span, format!("impl method '{}' parameter '{}' needs a type annotation to match trait '{}'", im.name, p.name, ti.name)));
+                                sig_ok = false;
+                                break;
+                            }
+                        };
+                        let pt = match self.annot_ty_in(m, pa, &p.span) {
+                            Ok(t) => t,
+                            Err(msg) => {
+                                self.diags.push(err(&p.span, msg));
+                                sig_ok = false;
+                                break;
+                            }
+                        };
+                        if !ty_eq(&pt, &sig.2[i - off]) {
+                            self.diags.push(err(&p.span, format!("method '{}' does not match trait '{}': parameter '{}' is {} but the trait declares {}", im.name, ti.name, p.name, ty_name(&pt), ty_name(&sig.2[i - off]))));
+                            sig_ok = false;
+                            break;
+                        }
+                    }
+                    if !sig_ok {
+                        continue;
+                    }
+                    match (&im.ret, &sig.3) {
+                        (Some(a), Some(rt)) => match self.annot_ty_in(m, a, &im.span) {
+                            Ok(t) => {
+                                if !ty_eq(&t, rt) {
+                                    self.diags.push(err(&im.span, format!("method '{}' does not match trait '{}': returns {} but the trait declares {}", im.name, ti.name, ty_name(&t), ty_name(rt))));
+                                    continue;
+                                }
+                            }
+                            Err(msg) => {
+                                self.diags.push(err(&im.span, msg));
+                                continue;
+                            }
+                        },
+                        (Some(_), None) => {
+                            self.diags.push(err(&im.span, format!("method '{}' does not match trait '{}': has a return type but the trait declares none", im.name, ti.name)));
+                            continue;
+                        }
+                        (None, Some(rt)) => {
+                            self.diags.push(err(&im.span, format!("method '{}' does not match trait '{}': must return {}", im.name, ti.name, ty_name(rt))));
+                            continue;
+                        }
+                        (None, None) => {}
+                    }
+                    // Register like a type method: dotted name under the
+                    // module; self-first methods are instance methods.
+                    let mkey = format!("{}.{}", td.name, im.name);
+                    if self.funcs.contains_key(&(m.clone(), mkey.clone())) {
+                        self.diags.push(err(&im.span, format!("method '{}' is already defined for type '{}'", im.name, td.name)));
+                        continue;
+                    }
+                    self.funcs.insert((m.clone(), mkey.clone()), Rc::new(im.clone()));
+                    self.fn_order.push((m.clone(), mkey.clone()));
+                    if let Some(si) = self.prog.structs.get_mut(&qual) {
+                        if im_self {
+                            si.methods.push(mkey);
+                        } else {
+                            si.statics.push(mkey);
+                        }
+                    }
+                }
+                // Coverage: every trait method needs an impl definition.
+                for (n, _, _, _) in &ti.methods {
+                    if !id.methods.iter().any(|im| im.name == *n) {
+                        self.diags.push(err(&id.span, format!("impl '{}' for '{}' is missing method '{}'", ti.name, td.name, n)));
+                    }
+                }
+            }
+        }
+    }
+
     /// Qual of a type by (module, short name): non-generic types come from
     /// short_types, instantiated generics from inst_by_name.
     fn type_qual_of(&self, module: &str, tname: &str) -> Option<String> {
@@ -439,6 +783,11 @@ impl Checker {
             TypeAnnot::Named(n) => {
                 if let Some(i) = params.iter().position(|p| p == n) {
                     return Ok(args[i].clone());
+                }
+                // Enums resolve before structs: both are Ty::Named, keyed by
+                // their own registries.
+                if let Some((_m, eq)) = self.find_enum(module, n) {
+                    return Ok(Ty::Named(eq));
                 }
                 // A bare generic type name without args is an arity error.
                 if let Some((_, q, td)) = self.find_type(module, n) {
@@ -505,7 +854,7 @@ impl Checker {
             )),
             Ty::Nullable(b) => Some(TypeAnnot::Nullable(Box::new(self.annot_of_ty(&b)?))),
             Ty::Named(q) => Some(TypeAnnot::Named(q.clone())),
-            Ty::Var(_) | Ty::Never => None,
+            Ty::Var(_) | Ty::Never | Ty::Func(_, _) => None,
         }
     }
 
@@ -737,7 +1086,7 @@ impl Checker {
 
     fn check_top(&mut self, ctx: &mut Ctx, s: &Stmt, out: &mut Vec<CS>, _module: &str) {
         match s {
-            Stmt::FuncDef(_) | Stmt::TypeDef(_) | Stmt::Extern(_) | Stmt::Use { .. } => {}
+            Stmt::FuncDef(_) | Stmt::TypeDef(_) | Stmt::EnumDef(_) | Stmt::TraitDef(_) | Stmt::ImplDef(_) | Stmt::Extern(_) | Stmt::Use { .. } => {}
             _ => {
                 let _ = self.check_stmt(ctx, s, out);
             }
@@ -1556,12 +1905,36 @@ impl Checker {
                 let ty = self.prog.globals[cname].ty.clone();
                 return Some(Tx { ty, span: sp.clone(), x: X::Global(cname.clone()) });
             }
-            if self.funcs.contains_key(&(tmod, tname)) {
-                self.diags.push(err(sp, format!("'{}' is a function; call it with {}(...)", name, name)));
-                return None;
+            if self.funcs.contains_key(&(tmod.clone(), tname.clone())) {
+                // Function used as a value: return a function pointer type.
+                let tmod_c = tmod.clone();
+                let tname_c = tname.clone();
+                let fd = self.funcs[&(tmod.clone(), tname.clone())].clone();
+                let param_tys: Vec<Ty> = fd.params.iter().map(|p| {
+                    if p.name == "self" {
+                        // self type comes from the function's self_ty
+                        Ty::Named(tname_c.split('.').next().unwrap_or(&tname_c).to_string())
+                    } else {
+                        p.annot.as_ref().and_then(|a| self.annot_ty_in(&tmod_c, a, &p.span).ok()).unwrap_or(Ty::Int)
+                    }
+                }).collect();
+                let ret_ty = fd.ret.as_ref().and_then(|a| self.annot_ty_in(&tmod_c, a, &fd.span).ok()).unwrap_or(Ty::NoneTy);
+                return Some(Tx { ty: Ty::Func(param_tys, Box::new(ret_ty)), span: sp.clone(), x: X::FuncValue(format!("still_{}__{}", sanitize(&tmod_c), sanitize(&tname_c.replace('.', "_")))) });
             }
             self.diags.push(err(sp, format!("'{}' is a type, not a value", name)));
             return None;
+        }
+        if self.funcs.contains_key(&(module.clone(), name.to_string())) {
+            let fd = self.funcs[&(module.clone(), name.to_string())].clone();
+            let param_tys: Vec<Ty> = fd.params.iter().map(|p| {
+                if p.name == "self" {
+                    Ty::Named(name.split('.').next().unwrap_or(name).to_string())
+                } else {
+                    p.annot.as_ref().and_then(|a| self.annot_ty_in(&module, a, &p.span).ok()).unwrap_or(Ty::Int)
+                }
+            }).collect();
+            let ret_ty = fd.ret.as_ref().and_then(|a| self.annot_ty_in(&module, a, &fd.span).ok()).unwrap_or(Ty::NoneTy);
+            return Some(Tx { ty: Ty::Func(param_tys, Box::new(ret_ty)), span: sp.clone(), x: X::FuncValue(format!("still_{}__{}", sanitize(&module), sanitize(&name.replace('.', "_")))) });
         }
         let mut candidates: Vec<String> = ctx.locals.iter().map(|(n, _)| n.clone()).collect();
         for (k, v) in &self.gmap {
@@ -1673,6 +2046,23 @@ impl Checker {
         if let Expr::Ident(base, bsp) = obj {
             let module = ctx.module.clone();
             if ctx.lookup(base).is_none() {
+                // Zero-payload variant as a plain value: `Shape.Point`.
+                if let Some((_emod, eq)) = self.find_enum(&module, base) {
+                    let ei = self.prog.enums.get(&eq).cloned().unwrap();
+                    match ei.variant_index(name) {
+                        Some(idx) => {
+                            if ei.variants[idx].1.is_empty() {
+                                return Some(Tx { ty: Ty::Named(eq.clone()), span: sp.clone(), x: X::EnumLit(eq, idx, vec![]) });
+                            }
+                            self.diags.push(err(bsp, format!("variant '{}' has payloads; construct it with {}.{}(...)", name, ei.name, name)));
+                            return None;
+                        }
+                        None => {
+                            self.diags.push(err(bsp, format!("enum '{}' has no variant '{}'", ei.name, name)));
+                            return None;
+                        }
+                    }
+                }
                 if let Some(target) = self.aliases.get(&module).and_then(|m| m.get(base)).cloned() {
                     if let Some(cname) = self.gmap.get(&(target.clone(), name.to_string())) {
                         let ty = self.prog.globals[cname].ty.clone();
@@ -1686,6 +2076,28 @@ impl Checker {
         let ot = self.infer(ctx, obj)?;
         match resolve(&ot.ty) {
             Ty::Named(qual) => {
+                if let Some(ei) = self.prog.enums.get(&qual).cloned() {
+                    if name == "tag" {
+                        return Some(Tx { ty: Ty::Int, span: sp.clone(), x: X::Field(Box::new(ot), "tag".to_string()) });
+                    }
+                    for (_vi, (vn, pts)) in ei.variants.iter().enumerate() {
+                        for pi in 0..pts.len() {
+                            let fname = enum_payload_field(vn, pi);
+                            if name == fname {
+                                return Some(Tx { ty: pts[pi].clone(), span: sp.clone(), x: X::Field(Box::new(ot), fname) });
+                            }
+                        }
+                    }
+                    let mut known = vec!["tag".to_string()];
+                    for (vn, pts) in &ei.variants {
+                        for pi in 0..pts.len() {
+                            known.push(enum_payload_field(vn, pi));
+                        }
+                    }
+                    let hint = did_you_mean(name, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
+                    self.diags.push(err(sp, format!("enum '{}' has no field '{}'{} (payloads are reached with match patterns)", ei.name, name, hint)));
+                    return None;
+                }
                 let si = self.prog.structs.get(&qual).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -1723,11 +2135,42 @@ impl Checker {
     fn infer_call(&mut self, ctx: &mut Ctx, callee: &Expr, args: &[Expr], sp: &Span) -> Option<Tx> {
         match callee {
             Expr::Ident(name, nsp) => {
-                if ctx.lookup(name).is_some() {
+                if let Some(id) = ctx.lookup(name) {
+                    let ty = ctx.locals[id as usize].1.clone();
+                    if let Ty::Func(param_tys, ret_ty) = resolve(&ty) {
+                        // Function value call: f(x, y)
+                        let mut ax = Vec::new();
+                        for a in args {
+                            ax.push(self.infer(ctx, a)?);
+                        }
+                        // Check argument count
+                        if ax.len() != param_tys.len() {
+                            self.diags.push(err(sp, format!("function value takes {} argument(s), got {}", param_tys.len(), ax.len())));
+                            return None;
+                        }
+                        let fv = Tx { ty: ty.clone(), span: nsp.clone(), x: X::Local(id) };
+                        return Some(Tx { ty: (*ret_ty).clone(), span: sp.clone(), x: X::CallFuncValue(Box::new(fv), ax) });
+                    }
                     self.diags.push(err(nsp, format!("cannot call the variable '{}'", name)));
                     return None;
                 }
+                // Check if it's a global variable of function type
                 let module = ctx.module.clone();
+                if let Some(cname) = self.gmap.get(&(module.clone(), name.to_string())).cloned() {
+                    let ty = self.prog.globals[&cname].ty.clone();
+                    if let Ty::Func(param_tys, ret_ty) = resolve(&ty) {
+                        let mut ax = Vec::new();
+                        for a in args {
+                            ax.push(self.infer(ctx, a)?);
+                        }
+                        if ax.len() != param_tys.len() {
+                            self.diags.push(err(sp, format!("function value takes {} argument(s), got {}", param_tys.len(), ax.len())));
+                            return None;
+                        }
+                        let fv = Tx { ty: ty.clone(), span: nsp.clone(), x: X::Global(cname.clone()) };
+                        return Some(Tx { ty: (*ret_ty).clone(), span: sp.clone(), x: X::CallFuncValue(Box::new(fv), ax) });
+                    }
+                }
                 let mut ax = Vec::new();
                 for a in args {
                     ax.push(self.infer(ctx, a)?);
@@ -1806,6 +2249,11 @@ impl Checker {
                 if let Expr::Ident(base, _) = obj.as_ref() {
                     let module = ctx.module.clone();
                     if ctx.lookup(base).is_none() {
+                        // Enum constructor: `Shape.Circle(1.0, 2.0)` — the
+                        // base names an enum, the member a variant.
+                        if let Some((_emod, eq)) = self.find_enum(&module, base) {
+                            return self.enum_ctor(&eq, mname, ctx, args, sp, msp);
+                        }
                         // Static method on an instantiated generic type:
                         // SlotMap<int>.new() — the parser encodes the type
                         // args into the base ident string.
@@ -1956,8 +2404,46 @@ impl Checker {
         }
     }
 
-    fn extern_call(&mut self, name: &str, args: Vec<Tx>, sp: &Span) -> Option<Tx> {
-        let e = self.externs[name].clone();
+    /// Build an enum constructor call: `Shape.Circle(1.0, 2.0)`. Payload
+    /// arguments are checked against the variant's payload types with the
+    /// same assign/coercion rules as struct fields.
+    fn enum_ctor(&mut self, eq: &str, variant: &str, ctx: &mut Ctx, args: &[Expr], sp: &Span, vsp: &Span) -> Option<Tx> {
+        let (ename, vidx, pts) = {
+            let ei = match self.prog.enums.get(eq) {
+                Some(e) => e,
+                None => return None,
+            };
+            match ei.variant_index(variant) {
+                Some(i) => (ei.name.clone(), i, ei.variants[i].1.clone()),
+                None => {
+                    let known: Vec<String> = ei.variants.iter().map(|(n, _)| n.clone()).collect();
+                    let hint = did_you_mean(variant, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
+                    self.diags.push(err(vsp, format!("enum '{}' has no variant '{}'{}", ei.name, variant, hint)));
+                    return None;
+                }
+            }
+        };
+        if args.len() != pts.len() {
+            let shape = if pts.is_empty() { variant.to_string() } else { format!("{}({})", variant, pts.iter().map(ty_name).collect::<Vec<_>>().join(", ")) };
+            self.diags.push(err(
+                sp,
+                format!("variant '{}' takes {} payload value(s), got {} — write {}.{}(...)", variant, pts.len(), args.len(), ename, shape),
+            ));
+            return None;
+        }
+        let mut ax = Vec::new();
+        for (a, pt) in args.iter().zip(pts.iter()) {
+            let at = self.infer(ctx, a)?;
+            if assign_ok(&at.ty, pt).is_none() && !coerce_holes(&at.ty, pt) {
+                self.diags.push(err(&at.span, format!("payload of '{}' wants {}, got {}", variant, ty_name(pt), ty_name(&at.ty))));
+                return None;
+            }
+            ax.push(at);
+        }
+        Some(Tx { ty: Ty::Named(eq.to_string()), span: sp.clone(), x: X::EnumLit(eq.to_string(), vidx, ax) })
+    }
+
+    fn extern_call(&mut self, name: &str, args: Vec<Tx>, sp: &Span) -> Option<Tx> {        let e = self.externs[name].clone();
         let n_fixed = e.params.len();
         if e.variadic {
             if args.len() < n_fixed {
@@ -3196,8 +3682,24 @@ impl Checker {
         };
         let sty = self.infer(ctx, subject)?;
         let sres = resolve(&sty.ty);
-        if !matches!(sres, Ty::Int | Ty::Str | Ty::Any | Ty::Tuple(_) | Ty::List(_)) {
-            self.diags.push(err(span, format!("match subject must be int, str, any, tuple or list, not {}", ty_name(&sty.ty))));
+        // An enum subject enables variant patterns; other named types are
+        // rejected with the regular subject message.
+        let subj_enum: Option<(String, EnumInfo)> = match &sres {
+            Ty::Named(q) => match self.prog.enums.get(q).cloned() {
+                Some(ei) => Some((q.clone(), ei)),
+                None => {
+                    self.diags.push(err(span, format!("match subject must be int, str, any, tuple, list or an enum, not {}", ty_name(&sty.ty))));
+                    return None;
+                }
+            },
+            Ty::Int | Ty::Str | Ty::Any | Ty::Tuple(_) | Ty::List(_) => None,
+            _ => {
+                self.diags.push(err(span, format!("match subject must be int, str, any, tuple, list or an enum, not {}", ty_name(&sty.ty))));
+                return None;
+            }
+        };
+        if !matches!(sres, Ty::Int | Ty::Str | Ty::Any | Ty::Tuple(_) | Ty::List(_) | Ty::Named(_)) {
+            self.diags.push(err(span, format!("match subject must be int, str, any, tuple, list or an enum, not {}", ty_name(&sty.ty))));
             return None;
         }
         enum ArmLower {
@@ -3220,6 +3722,25 @@ impl Checker {
             if arm.wildcard {
                 wildcard_seen = true;
                 else_body = Some(arm.body.clone());
+                continue;
+            }
+            if let Some((eq, ei)) = &subj_enum {
+                // Enum subject: each arm is exactly one variant pattern.
+                if arm.values.len() != 1 {
+                    self.diags.push(err(&arm.span, "an enum case arm must contain exactly one variant pattern".into()));
+                    return None;
+                }
+                let (vidx, vsp) = self.enum_arm_variant(&ei, &arm.values[0])?;
+                if !seen.insert(format!("e:{}:{}", eq, vidx)) {
+                    self.diags.push(err(&arm.span, "duplicate case variant".into()));
+                    return None;
+                }
+                let npts = ei.variants[vidx].1.len();
+                let vn = ei.variants[vidx].0.clone();
+                let items = self.enum_arm_payloads(&arm.values[0], &vn, npts, &vsp)?;
+                let (conds, body, names) = self.lower_enum_arm(ctx, &subj_name, eq, vidx, &items, arm)?;
+                binder_names.extend(names);
+                lowered_arms.push(ArmLower::Tower { conds, body, span: arm.span.clone() });
                 continue;
             }
             let mut value_pats: Vec<Expr> = Vec::new();
@@ -3464,11 +3985,215 @@ impl Checker {
                 conds.push(Expr::Cmp(Box::new(child.clone()), CmpOp::Eq, Box::new(it.clone()), sp.clone()));
                 Some(())
             }
+            Expr::Member(base, vname, msp) => {
+                // Qualified zero-payload nested variant: `Shape.Point`.
+                let ename = match base.as_ref() {
+                    Expr::Ident(e, _) => e.clone(),
+                    _ => {
+                        self.diags.push(err(msp, "invalid nested variant pattern".into()));
+                        return None;
+                    }
+                };
+                let eq = match resolve(cty) {
+                    Ty::Named(q) if self.prog.enums.contains_key(&q) => q,
+                    other => {
+                        self.diags.push(err(msp, format!("this pattern only matches enum values, not {}", ty_name(&other))));
+                        return None;
+                    }
+                };
+                let ei = self.prog.enums[&eq].clone();
+                if ename != ei.name {
+                    self.diags.push(err(msp, format!("'{}' is not the enum type here (expected '{}')", ename, ei.name)));
+                    return None;
+                }
+                let vidx = match ei.variant_index(vname) {
+                    Some(i) => i,
+                    None => {
+                        let known: Vec<String> = ei.variants.iter().map(|(n, _)| n.clone()).collect();
+                        let hint = did_you_mean(vname, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
+                        self.diags.push(err(msp, format!("enum '{}' has no variant '{}'{}", ei.name, vname, hint)));
+                        return None;
+                    }
+                };
+                self.pat_variant_walk(child, &eq, vidx, &[], sp, conds, binds)
+            }
+            Expr::Call(callee, items, csp) => {
+                // Nested variant pattern: `case Circle(Inner(x, y))` or
+                // `case Circle(Shape.Inner(x))` — the payload type must be an
+                // enum and the callee one of its variants.
+                let eq = match resolve(cty) {
+                    Ty::Named(q) if self.prog.enums.contains_key(&q) => q,
+                    other => {
+                        self.diags.push(err(csp, format!("this pattern only matches enum values, not {}", ty_name(&other))));
+                        return None;
+                    }
+                };
+                let (vname, ename) = match callee.as_ref() {
+                    Expr::Ident(n, _) => (n.clone(), None),
+                    Expr::Member(b, n, _) => {
+                        let e = match b.as_ref() {
+                            Expr::Ident(e, _) => e.clone(),
+                            _ => {
+                                self.diags.push(err(&callee.span(), "invalid nested variant pattern".into()));
+                                return None;
+                            }
+                        };
+                        (n.clone(), Some(e))
+                    }
+                    other => {
+                        self.diags.push(err(&other.span(), "invalid nested variant pattern".into()));
+                        return None;
+                    }
+                };
+                let ei = self.prog.enums[&eq].clone();
+                if let Some(e) = ename {
+                    if e != ei.name {
+                        self.diags.push(err(csp, format!("'{}' is not the enum type here (expected '{}')", e, ei.name)));
+                        return None;
+                    }
+                }
+                let vidx = match ei.variant_index(&vname) {
+                    Some(i) => i,
+                    None => {
+                        let known: Vec<String> = ei.variants.iter().map(|(n, _)| n.clone()).collect();
+                        let hint = did_you_mean(&vname, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
+                        self.diags.push(err(csp, format!("enum '{}' has no variant '{}'{}", ei.name, vname, hint)));
+                        return None;
+                    }
+                };
+                self.pat_variant_walk(child, &eq, vidx, items, sp, conds, binds)
+            }
             _ => {
                 self.diags.push(err(&it.span(), "unsupported pattern element".into()));
                 None
             }
         }
+    }
+
+    /// Walk one enum variant pattern against `path` (an expression denoting
+    /// the enum value): a tag test, then per-payload sub-patterns through
+    /// pat_elem against the flat payload fields.
+    fn pat_variant_walk(&mut self, path: &Expr, eq: &str, vidx: usize, items: &[Expr], sp: &Span, conds: &mut Vec<Expr>, binds: &mut Vec<Stmt>) -> Option<()> {
+        let (vname, pts) = {
+            let ei = &self.prog.enums[eq];
+            let (n, p) = &ei.variants[vidx];
+            (n.clone(), p.clone())
+        };
+        conds.push(Expr::Cmp(
+            Box::new(Expr::Member(Box::new(path.clone()), "tag".to_string(), sp.clone())),
+            CmpOp::Eq,
+            Box::new(Expr::IntLit(vidx as i64, sp.clone())),
+            sp.clone(),
+        ));
+        if items.len() != pts.len() {
+            self.diags.push(err(
+                sp,
+                format!(
+                    "variant '{}' takes {} payload pattern(s), got {} — write {}({})",
+                    vname,
+                    pts.len(),
+                    items.len(),
+                    vname,
+                    vec!["p0"; pts.len()].join(", ")
+                ),
+            ));
+            return None;
+        }
+        for (i, it) in items.iter().enumerate() {
+            let esp = it.span();
+            let fname = enum_payload_field(&vname, i);
+            let child = Expr::Member(Box::new(path.clone()), fname, esp.clone());
+            self.pat_elem(&child, &resolve_deep(&pts[i]), it, sp, conds, binds)?;
+        }
+        Some(())
+    }
+
+    /// Resolve a top-level enum case arm pattern to its variant index and
+    /// span. Accepts `Circle`, `Shape.Circle`, `Circle(...)` and
+    /// `Shape.Circle(...)` shapes (the parser encodes all four).
+    fn enum_arm_variant(&mut self, ei: &EnumInfo, pat: &Expr) -> Option<(usize, Span)> {
+        let (vname, vsp) = match pat {
+            Expr::Ident(n, s) => (n.clone(), s.clone()),
+            Expr::Call(callee, _, _) => match callee.as_ref() {
+                Expr::Ident(n, s) => (n.clone(), s.clone()),
+                Expr::Member(_, n, s) => (n.clone(), s.clone()),
+                other => {
+                    self.diags.push(err(&other.span(), "invalid variant pattern".into()));
+                    return None;
+                }
+            },
+            Expr::Member(_, n, s) => (n.clone(), s.clone()),
+            other => {
+                self.diags.push(err(&other.span(), "enum case patterns must be variant names or '_'".into()));
+                return None;
+            }
+        };
+        match ei.variant_index(&vname) {
+            Some(i) => Some((i, vsp)),
+            None => {
+                let known: Vec<String> = ei.variants.iter().map(|(n, _)| n.clone()).collect();
+                let hint = did_you_mean(&vname, &known).map(|h| format!(" (did you mean '{}'?)", h)).unwrap_or_default();
+                self.diags.push(err(&vsp, format!("enum '{}' has no variant '{}'{}", ei.name, vname, hint)));
+                None
+            }
+        }
+    }
+
+    /// Extract the payload sub-patterns of a top-level enum case arm,
+    /// rejecting a bare variant name when the variant has payloads.
+    fn enum_arm_payloads(&mut self, pat: &Expr, vname: &str, npts: usize, arm_sp: &Span) -> Option<Vec<Expr>> {
+        match pat {
+            Expr::Ident(..) => {
+                if npts > 0 {
+                    let ph: Vec<String> = (0..npts).map(|i| format!("p{}", i)).collect();
+                    self.diags.push(err(arm_sp, format!("variant '{}' has payloads; write '{}({})'", vname, vname, ph.join(", "))));
+                    return None;
+                }
+                Some(Vec::new())
+            }
+            Expr::Call(_, items, _) => Some(items.clone()),
+            Expr::Member(_, _, _) => {
+                if npts > 0 {
+                    let ph: Vec<String> = (0..npts).map(|i| format!("p{}", i)).collect();
+                    self.diags.push(err(arm_sp, format!("variant '{}' has payloads; write '{}({})'", vname, vname, ph.join(", "))));
+                } else {
+                    self.diags.push(err(arm_sp, format!("variant '{}' takes no payloads; write '{}'", vname, vname)));
+                }
+                None
+            }
+            _ => {
+                self.diags.push(err(arm_sp, "invalid variant pattern".into()));
+                None
+            }
+        }
+    }
+
+    /// Lower one enum case arm: tag test plus payload sub-pattern walk. The
+    /// arm body runs after the binders inside the innermost branch.
+    fn lower_enum_arm(
+        &mut self,
+        ctx: &mut Ctx,
+        subj_name: &str,
+        eq: &str,
+        vidx: usize,
+        items: &[Expr],
+        arm: &MatchCase,
+    ) -> Option<(Vec<Expr>, Vec<Stmt>, Vec<String>)> {
+        let _ = ctx;
+        let path = Expr::Ident(subj_name.to_string(), arm.span.clone());
+        let mut conds: Vec<Expr> = Vec::new();
+        let mut binds: Vec<Stmt> = Vec::new();
+        self.pat_variant_walk(&path, eq, vidx, items, &arm.span, &mut conds, &mut binds)?;
+        let names: Vec<String> = binds.iter().filter_map(|s| match s {
+            Stmt::Assign { targets, .. } if targets.len() == 1 => match &targets[0] {
+                Expr::Ident(n, _) => Some(n.clone()),
+                _ => None,
+            },
+            _ => None,
+        }).collect();
+        let mut body = binds;
+        body.extend(arm.body.iter().cloned());
+        Some((conds, body, names))
     }
 
     fn check_for(&mut self, ctx: &mut Ctx, vars: &[String], iter: &Expr, body: &[Stmt], span: &crate::span::Span, out: &mut Vec<CS>) -> Option<()> {
@@ -4039,6 +4764,10 @@ impl Checker {
                 let ot = self.infer(ctx, obj)?;
                 match resolve(&ot.ty) {
                     Ty::Named(qual) => {
+                        if self.prog.enums.contains_key(&qual) {
+                            self.diags.push(err(sp, "enum values are immutable; construct a new value with a variant constructor instead of writing fields".into()));
+                            return None;
+                        }
                         let si = self.prog.structs.get(&qual).cloned();
                         if let Some(si) = si {
                             if si.is_soa {

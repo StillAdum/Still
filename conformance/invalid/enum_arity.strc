@@ -1,0 +1,12 @@
+enum Fruit:
+    Apple(int)
+    Pear
+
+f = Fruit.Pear
+match f:
+    case Pear:
+        print("pear")
+    case Apple:
+        print("apple")
+    case _:
+        print("other")

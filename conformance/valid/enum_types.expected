@@ -1,0 +1,16 @@
+Circle(1.0, 2.0, 3.0)
+circle 1.0 2.0 3.0
+named blob 0.5
+point
+2
+true
+true false
+12.0
+ab
+15.0
+holder inner 4.0
+boxed point
+boxed circle 3.0
+boxed named n 2.0
+inner 1
+cx=1.0

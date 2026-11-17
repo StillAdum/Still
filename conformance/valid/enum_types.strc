@@ -1,0 +1,122 @@
+enum Shape:
+    Point
+    Circle(float, float, float)
+    Named(str, float)
+
+s = Shape.Circle(1.0, 2.0, 3.0)
+print(s)
+
+match s:
+    case Circle(x, y, r):
+        print("circle", x, y, r)
+    case Named(n, w):
+        print("named", n, w)
+    case Point:
+        print("point")
+
+t = Shape.Named("blob", 0.5)
+match t:
+    case Circle(cx, cy, cr):
+        print("circle", cx, cy, cr)
+    case Named(nm, wt):
+        print("named", nm, wt)
+    case Point:
+        print("point")
+
+p = Shape.Point
+match p:
+    case Circle(x, y, r):
+        print("circle", x, y, r)
+    case Named(n, w):
+        print("named", n, w)
+    case Point:
+        print("point")
+
+print(t.tag)
+print(t == Shape.Named("blob", 0.5))
+print(s == Shape.Circle(1.0, 2.0, 3.0), s == t)
+
+shapes = [Shape.Circle(1.0, 2.0, 3.0), Shape.Point, Shape.Named("wall", 9.0)]
+total = 0.0
+for sh in shapes:
+    match sh:
+        case Circle(_, _, r):
+            total += r
+        case Named(_, w):
+            total += w
+        case Point:
+            total += 0.0
+print(total)
+
+# enum payloads holding strings exercise clone/drop of refcounted fields
+words = [Shape.Named("a", 1.0), Shape.Named("b", 2.0)]
+out = ""
+for w in words:
+    match w:
+        case Named(n, v):
+            out += n
+            total += v
+        case _:
+            out += "."
+print(out)
+print(total)
+
+# enum in a struct field, matched through a bound variable
+type Holder:
+    label: str
+    shape: Shape
+
+h = Holder("h", Shape.Named("inner", 4.0))
+inner = h.shape
+match inner:
+    case Named(n, v):
+        print("holder", n, v)
+    case _:
+        print("holder other")
+
+# nested variant pattern: payload that is itself an enum
+enum Wrap:
+    Box(Shape)
+    Open
+
+w1 = Wrap.Box(Shape.Point)
+match w1:
+    case Box(Shape.Point):
+        print("boxed point")
+    case Open:
+        print("open")
+
+w2 = Wrap.Box(Shape.Circle(1.0, 2.0, 3.0))
+match w2:
+    case Box(Shape.Circle(_, _, r)):
+        print("boxed circle", r)
+    case Open:
+        print("open")
+
+w3 = Wrap.Box(Shape.Named("n", 2.0))
+match w3:
+    case Box(Shape.Named(nm, v)):
+        print("boxed named", nm, v)
+    case Open:
+        print("open")
+
+# refinement with a nested match inside an arm
+w4 = Wrap.Box(Shape.Circle(9.0, 9.0, 9.0))
+match w4:
+    case Box(b):
+        match b:
+            case Point:
+                print("inner point")
+            case _:
+                print("inner", b.tag)
+    case Open:
+        print("open")
+
+# string building through payloads
+desc = ""
+match s:
+    case Circle(x, _, _):
+        desc += "cx=" + str(x)
+    case _:
+        desc += "?"
+print(desc)

@@ -1,0 +1,17 @@
+# Dict-Heavy Benchmark
+# Measures: dict insertion and lookup throughput
+
+func dict_heavy(n: int) -> int:
+    d = {}
+    for i in range(n):
+        d[i] = i * 2
+    total = 0
+    for i in range(n):
+        total += d[i]
+    return total
+
+start = clock()
+result = dict_heavy(100000)
+elapsed = clock() - start
+print("result:", result)
+print("elapsed:", elapsed)

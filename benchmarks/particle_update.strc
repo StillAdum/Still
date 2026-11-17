@@ -1,0 +1,25 @@
+# Particle Update Benchmark
+# Measures: struct field mutation throughput
+
+type Particle:
+    x: float = 0.0
+    y: float = 0.0
+    vx: float = 1.0
+    vy: float = 1.0
+
+func update_particles(particles: [Particle], dt: float) -> none:
+    for p in particles:
+        p.x = p.x + p.vx * dt
+        p.y = p.y + p.vy * dt
+
+n = 100000
+particles = []
+for i in range(n):
+    particles.push(Particle(float(i), float(i), 1.0, 1.0))
+
+start = clock()
+update_particles(particles, 0.016)
+elapsed = clock() - start
+print("particles:", len(particles))
+print("elapsed:", elapsed)
+print("first:", particles[0].x, particles[0].y)

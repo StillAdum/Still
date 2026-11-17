@@ -231,6 +231,31 @@ impl Parser {
                     None
                 }
             }
+            // `enum` is a soft keyword: only an enum definition when followed
+            // by a name and a colon, so variables named `enum` keep working.
+            Tok::Ident(ref n) if n == "enum" && top && self.enum_ahead() => {
+                if !attrs.is_empty() {
+                    self.error(&sp, "attributes are not allowed on enums".into());
+                    return None;
+                }
+                self.parse_enum(sp).map(Stmt::EnumDef)
+            }
+            // `trait` is a soft keyword: trait + Name + ':' at top level.
+            Tok::Ident(ref n) if n == "trait" && top && self.trait_ahead() => {
+                if !attrs.is_empty() {
+                    self.error(&sp, "attributes are not allowed on traits".into());
+                    return None;
+                }
+                self.parse_trait(sp).map(Stmt::TraitDef)
+            }
+            // `impl` is a soft keyword: impl + Trait + 'for' + Type + ':'.
+            Tok::Ident(ref n) if n == "impl" && top && self.impl_ahead() => {
+                if !attrs.is_empty() {
+                    self.error(&sp, "attributes are not allowed on impls".into());
+                    return None;
+                }
+                self.parse_impl(sp).map(Stmt::ImplDef)
+            }
             Tok::Kw(crate::lexer::Kw::Extern) => {
                 if top {
                     self.parse_extern(sp).map(Stmt::Extern)
@@ -488,6 +513,371 @@ impl Parser {
             methods,
             span: sp,
         })
+    }
+
+    /// `enum` starts a definition only when followed by a name and ':'.
+    fn enum_ahead(&self) -> bool {
+        let t = &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok;
+        if !matches!(t, Tok::Ident(_)) {
+            return false;
+        }
+        let t2 = &self.toks[(self.pos + 2).min(self.toks.len() - 1)].tok;
+        matches!(t2, Tok::P(crate::lexer::P::Colon))
+    }
+
+    /// `trait` starts a definition only when followed by a name and ':'.
+    fn trait_ahead(&self) -> bool {
+        let t = &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok;
+        if !matches!(t, Tok::Ident(_)) {
+            return false;
+        }
+        let t2 = &self.toks[(self.pos + 2).min(self.toks.len() - 1)].tok;
+        matches!(t2, Tok::P(crate::lexer::P::Colon))
+    }
+
+    /// `impl` starts a definition only when followed by Trait 'for' Type ':'.
+    fn impl_ahead(&self) -> bool {
+        let t = &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok;
+        if !matches!(t, Tok::Ident(_)) {
+            return false;
+        }
+        let t2 = &self.toks[(self.pos + 2).min(self.toks.len() - 1)].tok;
+        if !matches!(t2, Tok::Kw(crate::lexer::Kw::For)) {
+            return false;
+        }
+        let t3 = &self.toks[(self.pos + 3).min(self.toks.len() - 1)].tok;
+        if !matches!(t3, Tok::Ident(_)) {
+            return false;
+        }
+        let t4 = &self.toks[(self.pos + 4).min(self.toks.len() - 1)].tok;
+        matches!(t4, Tok::P(crate::lexer::P::Colon))
+    }
+
+    /// Parse a trait definition:
+    /// ```text
+    /// trait Drawable:
+    ///     func draw(self)
+    ///     func area(self) -> float
+    /// ```
+    /// One signature per line; methods are signature-only (no body, no
+    /// default parameter values). Signatures must be fully annotated.
+    fn parse_trait(&mut self, sp: Span) -> Option<TraitDef> {
+        self.bump(); // 'trait'
+        let name = match self.cur().tok.clone() {
+            Tok::Ident(n) => {
+                self.bump();
+                n
+            }
+            other => {
+                self.error(&self.cur().span, format!("expected trait name, found {}", tok_str(&other)));
+                return None;
+            }
+        };
+        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
+            self.error(&self.cur().span, format!("expected ':' after trait name '{}'", name));
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Newline) {
+            self.error(&self.cur().span, "expected a newline and an indented body for the trait".into());
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Indent) {
+            self.error(&self.cur().span, format!("expected an indented body for trait '{}'", name));
+            return None;
+        }
+        self.bump();
+        let mut methods: Vec<FuncDef> = Vec::new();
+        loop {
+            match self.cur().tok.clone() {
+                Tok::Dedent => {
+                    self.bump();
+                    break;
+                }
+                Tok::Eof => break,
+                Tok::Newline => {
+                    self.bump();
+                }
+                Tok::Kw(crate::lexer::Kw::Func) => {
+                    let fsp = self.cur().span.clone();
+                    match self.parse_trait_method(fsp) {
+                        Some(m) => {
+                            if methods.iter().any(|x| x.name == m.name) {
+                                self.error(&m.span, format!("method '{}' is already declared in trait '{}'", m.name, name));
+                                return None;
+                            }
+                            methods.push(m);
+                        }
+                        None => self.sync_stmt(),
+                    }
+                }
+                other => {
+                    self.error(&self.cur().span, format!("expected a method signature inside trait '{}', found {}", name, tok_str(&other)));
+                    return None;
+                }
+            }
+        }
+        if methods.is_empty() {
+            self.error(&sp, format!("trait '{}' needs at least one method", name));
+            return None;
+        }
+        Some(TraitDef { name, methods, span: sp })
+    }
+
+    /// One trait method signature: `func name(a: int, b: float) -> ret`.
+    /// Signature-only: no body, no default parameter values, all parameters
+    /// (except `self`) and the return type must be annotated.
+    fn parse_trait_method(&mut self, sp: Span) -> Option<FuncDef> {
+        self.bump(); // 'func'
+        let name = match self.cur().tok.clone() {
+            Tok::Ident(n) => {
+                self.bump();
+                n
+            }
+            other => {
+                self.error(&self.cur().span, format!("expected method name, found {}", tok_str(&other)));
+                return None;
+            }
+        };
+        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::LP)) {
+            self.error(&self.cur().span, format!("expected '(' after method name '{}'", name));
+            return None;
+        }
+        let (params, variadic) = self.parse_params()?;
+        if variadic {
+            self.error(&sp, "'...' is not allowed in trait method signatures".into());
+            return None;
+        }
+        let ret = if matches!(self.cur().tok, Tok::P(crate::lexer::P::Arrow)) {
+            self.bump();
+            Some(self.parse_annot()?)
+        } else {
+            None
+        };
+        for p in &params {
+            if p.name == "self" {
+                if p.annot.is_some() {
+                    self.error(&p.span, "'self' is not annotated in trait method signatures".into());
+                    return None;
+                }
+                if p.default.is_some() {
+                    self.error(&p.span, "'self' cannot have a default value".into());
+                    return None;
+                }
+                continue;
+            }
+            if p.annot.is_none() {
+                self.error(&p.span, format!("trait method '{}' parameter '{}' needs a type annotation", name, p.name));
+                return None;
+            }
+            if p.default.is_some() {
+                self.error(&p.span, "trait method signatures cannot have default values".into());
+                return None;
+            }
+        }
+        if !matches!(self.cur().tok, Tok::Newline) && !matches!(self.cur().tok, Tok::Dedent) && !matches!(self.cur().tok, Tok::Eof) {
+            self.error(&self.cur().span, "expected a newline after the trait method signature".into());
+            return None;
+        }
+        Some(FuncDef {
+            attrs: Vec::new(),
+            name,
+            params,
+            ret,
+            body: Vec::new(),
+            span: sp,
+        })
+    }
+
+    /// Parse an impl definition:
+    /// ```text
+    /// impl Drawable for Circle:
+    ///     func draw(self):
+    ///         print("circle")
+    ///     func area(self) -> float:
+    ///         return 3.14 * self.r * self.r
+    /// ```
+    /// Method bodies are full function definitions (parsed like type
+    /// methods); the checker validates each against the trait signature.
+    fn parse_impl(&mut self, sp: Span) -> Option<ImplDef> {
+        self.bump(); // 'impl'
+        let tname = match self.cur().tok.clone() {
+            Tok::Ident(n) => {
+                self.bump();
+                n
+            }
+            other => {
+                self.error(&self.cur().span, format!("expected trait name after 'impl', found {}", tok_str(&other)));
+                return None;
+            }
+        };
+        if !matches!(self.cur().tok, Tok::Kw(crate::lexer::Kw::For)) {
+            self.error(&self.cur().span, format!("expected 'for' after trait name '{}' in impl", tname));
+            return None;
+        }
+        self.bump();
+        let tyname = match self.cur().tok.clone() {
+            Tok::Ident(n) => {
+                self.bump();
+                n
+            }
+            other => {
+                self.error(&self.cur().span, format!("expected a type name after 'for' in impl, found {}", tok_str(&other)));
+                return None;
+            }
+        };
+        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
+            self.error(&self.cur().span, format!("expected ':' after '{} for {}'", tname, tyname));
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Newline) {
+            self.error(&self.cur().span, "expected a newline and an indented body for the impl".into());
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Indent) {
+            self.error(&self.cur().span, format!("expected an indented body for impl '{} for {}'", tname, tyname));
+            return None;
+        }
+        self.bump();
+        let mut methods: Vec<FuncDef> = Vec::new();
+        loop {
+            match self.cur().tok.clone() {
+                Tok::Dedent => {
+                    self.bump();
+                    break;
+                }
+                Tok::Eof => break,
+                Tok::Newline => {
+                    self.bump();
+                }
+                Tok::Kw(crate::lexer::Kw::Func) => {
+                    let fsp = self.cur().span.clone();
+                    match self.parse_func(Vec::new(), fsp) {
+                        Some(m) => {
+                            if methods.iter().any(|x| x.name == m.name) {
+                                self.error(&m.span, format!("method '{}' is already defined in this impl", m.name));
+                                return None;
+                            }
+                            methods.push(m);
+                        }
+                        None => self.sync_stmt(),
+                    }
+                }
+                other => {
+                    self.error(&self.cur().span, format!("expected a method definition inside impl '{} for {}', found {}", tname, tyname, tok_str(&other)));
+                    return None;
+                }
+            }
+        }
+        if methods.is_empty() {
+            self.error(&sp, format!("impl '{}' for '{}' needs at least one method", tname, tyname));
+            return None;
+        }
+        Some(ImplDef { name: tname, for_type: tyname, methods, span: sp })
+    }
+
+    /// Parse an enum definition:
+    /// ```text
+    /// enum Shape:
+    ///     Circle(f32, f32, f32)
+    ///     Rect(f32, f32, f32, f32)
+    ///     Point
+    /// ```
+    /// One variant per line; payloads are plain type annotations. Variants
+    /// with payloads need parentheses; trailing commas are ignored.
+    fn parse_enum(&mut self, sp: Span) -> Option<EnumDef> {
+        self.bump(); // 'enum'
+        let name = match self.cur().tok.clone() {
+            Tok::Ident(n) => {
+                self.bump();
+                n
+            }
+            other => {
+                self.error(&self.cur().span, format!("expected enum name, found {}", tok_str(&other)));
+                return None;
+            }
+        };
+        if !matches!(self.cur().tok, Tok::P(crate::lexer::P::Colon)) {
+            self.error(&self.cur().span, format!("expected ':' after enum name '{}'", name));
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Newline) {
+            self.error(&self.cur().span, "expected a newline and an indented body for the enum".into());
+            return None;
+        }
+        self.bump();
+        if !matches!(self.cur().tok, Tok::Indent) {
+            self.error(&self.cur().span, format!("expected an indented body for enum '{}'", name));
+            return None;
+        }
+        self.bump();
+        let mut variants: Vec<VariantDef> = Vec::new();
+        loop {
+            match self.cur().tok.clone() {
+                Tok::Dedent => {
+                    self.bump();
+                    break;
+                }
+                Tok::Eof => break,
+                Tok::Newline => {
+                    self.bump();
+                }
+                Tok::Ident(vname) => {
+                    let vsp = self.cur().span.clone();
+                    self.bump();
+                    let mut payloads = Vec::new();
+                    if matches!(self.cur().tok, Tok::P(crate::lexer::P::LP)) {
+                        self.bump();
+                        loop {
+                            if matches!(self.cur().tok, Tok::P(crate::lexer::P::RP)) {
+                                self.bump();
+                                break;
+                            }
+                            payloads.push(self.parse_annot()?);
+                            if matches!(self.cur().tok, Tok::P(crate::lexer::P::Comma)) {
+                                self.bump();
+                                continue;
+                            }
+                            if matches!(self.cur().tok, Tok::P(crate::lexer::P::RP)) {
+                                self.bump();
+                                break;
+                            }
+                            self.error(&self.cur().span, "expected ',' or ')' in the variant payload list".into());
+                            return None;
+                        }
+                    }
+                    if !matches!(self.cur().tok, Tok::Newline) && !matches!(self.cur().tok, Tok::Dedent) {
+                        self.error(&self.cur().span, "expected a newline after the variant".into());
+                        return None;
+                    }
+                    if let Some(Tok::Newline) = Some(self.cur().tok.clone()) {
+                        self.bump();
+                    }
+                    if variants.iter().any(|v| v.name == vname) {
+                        self.error(&vsp, format!("variant '{}' is already defined in this enum", vname));
+                        return None;
+                    }
+                    variants.push(VariantDef {
+                        name: vname,
+                        payloads,
+                        span: vsp,
+                    });
+                }
+                other => {
+                    self.error(&self.cur().span, format!("expected a variant name, found {}", tok_str(&other)));
+                    return None;
+                }
+            }
+        }
+        if variants.is_empty() {
+            self.error(&sp, format!("enum '{}' needs at least one variant", name));
+            return None;
+        }
+        Some(EnumDef { name, variants, span: sp })
     }
 
     fn parse_extern(&mut self, sp: Span) -> Option<Vec<ExternFn>> {
@@ -810,7 +1200,7 @@ impl Parser {
     fn case_ahead(&self) -> bool {
         match &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok {
             Tok::Int(_) | Tok::Str(_) | Tok::P(crate::lexer::P::Minus) => true,
-            Tok::Ident(n) => n == "_",
+            Tok::Ident(_) => true, // `_`, a bare variant, or `Variant(...)`
             Tok::P(crate::lexer::P::LP) | Tok::P(crate::lexer::P::LB) => true,
             _ => false,
         }
@@ -822,42 +1212,85 @@ impl Parser {
         let mut values: Vec<Expr> = Vec::new();
         let mut wildcard = false;
         loop {
-            let t = self.bump();
-            match t.tok {
-                Tok::Ident(ref n) if n == "_" => {
-                    wildcard = true;
-                }
-                Tok::Int(v) => {
-                    values.push(Expr::IntLit(v, t.span.clone()));
-                }
-                Tok::Str(parts) => match parts.as_slice() {
-                    [StrPart::Lit(s)] => values.push(Expr::StrLit(s.clone(), t.span.clone())),
-                    _ => {
-                        self.error(&t.span, "case patterns must be plain string literals".into());
-                        return None;
-                    }
-                },
-                Tok::P(crate::lexer::P::Minus) => {
-                    let t2 = self.bump();
-                    match t2.tok {
-                        Tok::Int(v) => values.push(Expr::IntLit(v.wrapping_neg(), t2.span.clone())),
+            // A bare or qualified variant pattern: `Circle`, `Circle(x, y)`,
+            // `Shape.Circle`, `Shape.Circle(x)`. `_` stays the wildcard;
+            // identifiers that are not variant names are rejected by the
+            // checker with a message.
+            let is_ident = matches!(self.cur().tok, Tok::Ident(_));
+            let is_wildcard = matches!(&self.cur().tok, Tok::Ident(n) if n == "_");
+            if is_ident && !is_wildcard {
+                let n = match self.cur().tok.clone() {
+                    Tok::Ident(n) => n,
+                    _ => unreachable!(),
+                };
+                let isp = self.cur().span.clone();
+                self.bump();
+                // Qualified form `Enum.Variant`: an optional enum-name prefix.
+                let (ename, vname, vsp) = if matches!(self.cur().tok, Tok::P(crate::lexer::P::Dot)) {
+                    self.bump();
+                    match self.cur().tok.clone() {
+                        Tok::Ident(v2) => {
+                            let v2sp = self.cur().span.clone();
+                            self.bump();
+                            (Some(n.clone()), v2, v2sp)
+                        }
                         other => {
-                            self.error(&t2.span, format!("expected an integer after '-', found {}", tok_str(&other)));
+                            self.error(&self.cur().span, format!("expected a variant name after '{}.', found {}", n, tok_str(&other)));
                             return None;
                         }
                     }
+                } else {
+                    (None, n, isp)
+                };
+                let callee = match ename {
+                    Some(e) => Expr::Member(Box::new(Expr::Ident(e, vsp.clone())), vname, vsp.clone()),
+                    None => Expr::Ident(vname, vsp.clone()),
+                };
+                if matches!(self.cur().tok, Tok::P(crate::lexer::P::LP)) {
+                    self.bump();
+                    let items = self.parse_pattern_seq(crate::lexer::P::RP, &vsp)?;
+                    values.push(Expr::Call(Box::new(callee), items, vsp));
+                } else {
+                    values.push(callee);
                 }
-                Tok::P(crate::lexer::P::LP) => {
-                    let items = self.parse_pattern_seq(crate::lexer::P::RP, &t.span)?;
-                    values.push(Expr::Tuple(items, t.span.clone()));
-                }
-                Tok::P(crate::lexer::P::LB) => {
-                    let items = self.parse_pattern_seq(crate::lexer::P::RB, &t.span)?;
-                    values.push(Expr::ListLit(items, t.span.clone()));
-                }
-                other => {
-                    self.error(&t.span, format!("expected a literal or '_' in case pattern, found {}", tok_str(&other)));
-                    return None;
+            } else {
+                let t = self.bump();
+                match t.tok {
+                    Tok::Ident(ref n) if n == "_" => {
+                        wildcard = true;
+                    }
+                    Tok::Int(v) => {
+                        values.push(Expr::IntLit(v, t.span.clone()));
+                    }
+                    Tok::Str(parts) => match parts.as_slice() {
+                        [StrPart::Lit(s)] => values.push(Expr::StrLit(s.clone(), t.span.clone())),
+                        _ => {
+                            self.error(&t.span, "case patterns must be plain string literals".into());
+                            return None;
+                        }
+                    },
+                    Tok::P(crate::lexer::P::Minus) => {
+                        let t2 = self.bump();
+                        match t2.tok {
+                            Tok::Int(v) => values.push(Expr::IntLit(v.wrapping_neg(), t2.span.clone())),
+                            other => {
+                                self.error(&t2.span, format!("expected an integer after '-', found {}", tok_str(&other)));
+                                return None;
+                            }
+                        }
+                    }
+                    Tok::P(crate::lexer::P::LP) => {
+                        let items = self.parse_pattern_seq(crate::lexer::P::RP, &t.span)?;
+                        values.push(Expr::Tuple(items, t.span.clone()));
+                    }
+                    Tok::P(crate::lexer::P::LB) => {
+                        let items = self.parse_pattern_seq(crate::lexer::P::RB, &t.span)?;
+                        values.push(Expr::ListLit(items, t.span.clone()));
+                    }
+                    other => {
+                        self.error(&t.span, format!("expected a literal, '_', or a variant name in case pattern, found {}", tok_str(&other)));
+                        return None;
+                    }
                 }
             }
             if matches!(self.cur().tok, Tok::P(crate::lexer::P::Comma)) {
@@ -907,9 +1340,45 @@ impl Parser {
         Some(items)
     }
 
-    /// One pattern element: a binding name, `_`, a literal, or a nested
-    /// `(…)` / `[…]` pattern.
+    /// One pattern element: a binding name, `_`, a literal, a nested
+    /// `(…)` / `[…]` pattern, or a nested variant pattern `Inner(...)` /
+    /// `Enum.Inner(...)` (validated by the checker; the parser only sees
+    /// `Ident (` and `Ident . Ident`).
     fn parse_pattern_el(&mut self) -> Option<Expr> {
+        // Nested variant pattern: `Inner(...)` or `Enum.Inner(...)`.
+        if let Tok::Ident(n) = self.cur().tok.clone() {
+            if n != "_" {
+                let next = &self.toks[(self.pos + 1).min(self.toks.len() - 1)].tok;
+                let paren = matches!(next, Tok::P(crate::lexer::P::LP));
+                let qual = matches!(next, Tok::P(crate::lexer::P::Dot));
+                if paren || qual {
+                    let isp = self.cur().span.clone();
+                    self.bump();
+                    let base: Expr = if qual {
+                        self.bump(); // '.'
+                        let v2 = match self.cur().tok.clone() {
+                            Tok::Ident(v2) => {
+                                self.bump();
+                                v2
+                            }
+                            other => {
+                                self.error(&self.cur().span, format!("expected a variant name after '{}.', found {}", n, tok_str(&other)));
+                                return None;
+                            }
+                        };
+                        Expr::Member(Box::new(Expr::Ident(n, isp.clone())), v2, isp.clone())
+                    } else {
+                        Expr::Ident(n, isp.clone())
+                    };
+                    if matches!(self.cur().tok, Tok::P(crate::lexer::P::LP)) {
+                        self.bump();
+                        let items = self.parse_pattern_seq(crate::lexer::P::RP, &isp)?;
+                        return Some(Expr::Call(Box::new(base), items, isp));
+                    }
+                    return Some(base);
+                }
+            }
+        }
         let t = self.bump();
         match t.tok {
             Tok::Ident(n) => Some(Expr::Ident(n, t.span.clone())),

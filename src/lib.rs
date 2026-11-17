@@ -14,7 +14,7 @@ use span::Diag;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub const VERSION: &str = "0.4.1";
+pub const VERSION: &str = "0.5.0";
 
 pub const STD_MATH: &str = include_str!("stdlib/math.strc");
 pub const STD_SORT: &str = include_str!("stdlib/sort.strc");
@@ -444,6 +444,44 @@ pub fn file_symbols(src: &str, label: &str) -> Vec<Sym> {
                     line: 0,
                     detail: format!("use {}", target),
                 });
+            }
+            ast::Stmt::EnumDef(e) => {
+                syms.push(Sym { name: e.name.clone(), kind: "enum", line: e.span.line, detail: "enum".into() });
+                for v in &e.variants {
+                    syms.push(Sym {
+                        name: v.name.clone(),
+                        kind: "variant",
+                        line: v.span.line,
+                        detail: format!("{}.{}", e.name, v.name),
+                    });
+                }
+            }
+            ast::Stmt::TraitDef(t) => {
+                syms.push(Sym { name: t.name.clone(), kind: "trait", line: t.span.line, detail: "trait".into() });
+                for m in &t.methods {
+                    syms.push(Sym {
+                        name: m.name.clone(),
+                        kind: "trait method",
+                        line: m.span.line,
+                        detail: format!("{}.{}", t.name, m.name),
+                    });
+                }
+            }
+            ast::Stmt::ImplDef(i) => {
+                syms.push(Sym {
+                    name: format!("{} for {}", i.name, i.for_type),
+                    kind: "impl",
+                    line: i.span.line,
+                    detail: "impl".into(),
+                });
+                for m in &i.methods {
+                    syms.push(Sym {
+                        name: m.name.clone(),
+                        kind: "impl method",
+                        line: m.span.line,
+                        detail: format!("{} for {}.{}", i.name, i.for_type, m.name),
+                    });
+                }
             }
             ast::Stmt::Assign { targets, op: None, .. } => {
                 for t in targets {

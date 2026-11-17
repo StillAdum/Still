@@ -1,0 +1,2 @@
+main
+/tmp/conformance/invalid/trait_bad_sig.strc:9:5: error: method 'describe' does not match trait 'Describable': the impl takes self but the trait does not

@@ -80,6 +80,52 @@ impl TypeDef {
     }
 }
 
+/// One enum variant: `Circle(f32, f32, f32)` — name plus payload types.
+#[derive(Clone, Debug)]
+pub struct VariantDef {
+    pub name: String,
+    pub payloads: Vec<TypeAnnot>,
+    pub span: Span,
+}
+
+/// `enum Shape: Circle(f32, f32, f32) / Rect(f32, f32, f32, f32) / Point`
+#[derive(Clone, Debug)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<VariantDef>,
+    pub span: Span,
+}
+
+/// `trait Drawable:` — method signatures only. Stage B: traits are a
+/// compile-time contract; impl methods become real struct methods
+/// (static dispatch). Dynamic dispatch is a follow-up.
+#[derive(Clone, Debug)]
+pub struct TraitDef {
+    pub name: String,
+    pub methods: Vec<FuncDef>,
+    pub span: Span,
+}
+
+/// `impl Drawable for Circle:` — one type's implementation of a trait.
+#[derive(Clone, Debug)]
+pub struct ImplDef {
+    pub name: String,
+    pub for_type: String,
+    pub methods: Vec<FuncDef>,
+    pub span: Span,
+}
+
+/// A registered trait: method signatures with resolved types. `self` is
+/// implicit (unannotated) in trait signatures.
+#[derive(Clone, Debug)]
+pub struct TraitInfo {
+    pub module: String,
+    pub name: String,
+    /// (method name, takes self, param types excluding self, return type)
+    pub methods: Vec<(String, bool, Vec<Ty>, Option<Ty>)>,
+    pub span: Span,
+}
+
 #[derive(Clone, Debug)]
 pub struct ExternFn {
     pub name: String,
@@ -168,6 +214,9 @@ pub struct MatchCase {
 pub enum Stmt {
     FuncDef(FuncDef),
     TypeDef(TypeDef),
+    EnumDef(EnumDef),
+    TraitDef(TraitDef),
+    ImplDef(ImplDef),
     Extern(Vec<ExternFn>),
     Use {
         target: String,
@@ -265,6 +314,9 @@ pub enum Ty {
     Named(String),
     Any,
     Never,
+    /// Function type: (param types, return type). Used for first-class
+    /// function values with static dispatch (no capture yet).
+    Func(Vec<Ty>, Box<Ty>),
 }
 
 pub fn resolve(t: &Ty) -> Ty {
@@ -283,6 +335,7 @@ pub fn resolve_deep(t: &Ty) -> Ty {
         Ty::List(e) => Ty::List(Rc::new(resolve_deep(&e))),
         Ty::Dict(k, v) => Ty::Dict(Rc::new(resolve_deep(&k)), Rc::new(resolve_deep(&v))),
         Ty::Tuple(ts) => Ty::Tuple(Rc::new(ts.iter().map(resolve_deep).collect())),
+Ty::Func(ps, r) => Ty::Func(ps.iter().map(resolve_deep).collect(), Box::new(resolve_deep(&r))),
         other => other,
     }
 }
@@ -295,6 +348,7 @@ pub fn ty_eq(a: &Ty, b: &Ty) -> bool {
         (Ty::List(a), Ty::List(b)) => ty_eq(&a, &b),
         (Ty::Dict(ak, av), Ty::Dict(bk, bv)) => ty_eq(&ak, &bk) && ty_eq(&av, &bv),
         (Ty::Tuple(a), Ty::Tuple(b)) => a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| ty_eq(x, y)),
+(Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => a_params.len() == b_params.len() && a_params.iter().zip(b_params.iter()).all(|(x, y)| ty_eq(x, y)) && ty_eq(&a_ret, &b_ret),
         _ => false,
     }
 }
@@ -317,11 +371,15 @@ pub fn ty_name(t: &Ty) -> String {
         Ty::Named(n) => n,
         Ty::Any => "any".into(),
         Ty::Never => "never".into(),
+        Ty::Func(params, ret) => {
+            let ps: Vec<String> = params.iter().map(ty_name).collect();
+            format!("func({}) -> {}", ps.join(", "), ty_name(&ret))
+        },
     }
 }
 
 pub fn is_ref_ty(t: &Ty) -> bool {
-    matches!(resolve(t), Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Named(_) | Ty::Any)
+    matches!(resolve(t), Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Named(_) | Ty::Any | Ty::Func(..))
 }
 
 #[derive(Clone, Debug)]
@@ -344,6 +402,9 @@ pub enum X {
     DictLit(Vec<(Tx, Tx)>),
     TupleLit(Vec<Tx>),
     StructLit(String, Vec<(String, Tx)>),
+    /// Enum constructor: `Shape.Circle(1.0, 2.0)` — variant index is the
+    /// runtime tag; payloads are stored flat (`Variant_i` fields).
+    EnumLit(String, usize, Vec<Tx>),
     SoaNew(String, Box<Tx>),
     Neg(Box<Tx>),
     BNot(Box<Tx>),
@@ -356,6 +417,7 @@ pub enum X {
     IsNone(Box<Tx>, bool),
     Cond(Box<Tx>, Box<Tx>, Box<Tx>),
     CallFn(usize, Vec<Tx>),
+    CallFuncValue(Box<Tx>, Vec<Tx>),
     CallExtern(String, Vec<Tx>),
     Builtin(Bi, Vec<Tx>),
     Method(Box<Tx>, String, Vec<Tx>),
@@ -367,6 +429,7 @@ pub enum X {
     Unwrap(Box<Tx>),
     AsStr(Box<Tx>),
     AsFloat(Box<Tx>),
+    FuncValue(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -535,6 +598,25 @@ pub struct StructInfo {
     pub ty_args: Vec<Ty>,
 }
 
+/// A registered enum: variants with resolved payload types. The enum value
+/// itself is `Ty::Named("module::Name")`, laid out as a flat struct with a
+/// `tag` int plus one field per payload slot (`Variant_0`, `Variant_1`, …).
+#[derive(Clone, Debug)]
+pub struct EnumInfo {
+    pub module: String,
+    pub name: String,
+    /// (variant name, payload types) in declaration order; the index IS the
+    /// runtime tag.
+    pub variants: Vec<(String, Vec<Ty>)>,
+    pub exported: bool,
+}
+
+impl EnumInfo {
+    pub fn variant_index(&self, name: &str) -> Option<usize> {
+        self.variants.iter().position(|(n, _)| n == name)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct GlobalVar {
     pub cname: String,
@@ -549,6 +631,8 @@ pub struct Program {
     pub funcs: Vec<CFunc>,
     pub externs: Vec<ExternDecl>,
     pub structs: HashMap<String, StructInfo>,
+    pub enums: HashMap<String, EnumInfo>,
+    pub traits: HashMap<String, TraitInfo>,
     pub globals: HashMap<String, GlobalVar>,
     pub global_order: Vec<String>,
     pub module_inits: Vec<(String, Vec<CS>)>,
@@ -577,6 +661,15 @@ pub fn ty_tag(t: &Ty) -> String {
         }
         Ty::Named(n) => sanitize(&n.replace("::", "__")),
         Ty::Never => "x".into(),
+        Ty::Func(params, ret) => {
+            let mut tag = String::from("F");
+            for p in params {
+                tag.push_str(&ty_tag(&p));
+            }
+            tag.push('_');
+            tag.push_str(&ty_tag(&ret));
+            tag
+        },
     }
 }
 

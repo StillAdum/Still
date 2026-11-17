@@ -1,0 +1,2 @@
+main
+/tmp/conformance/invalid/trait_missing_method.strc:10:5: error: impl 'Describable' for 'Point' is missing method 'category'

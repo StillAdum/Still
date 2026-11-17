@@ -1,0 +1,12 @@
+trait Describable:
+    func describe(self) -> str
+    func category() -> str
+
+type Point:
+    x: int
+    y: int
+
+impl Describable for Point:
+    // Missing category() method
+    func describe(self) -> str:
+        return "Point(" + string(self.x) + ", " + string(self.y) + ")"

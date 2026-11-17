@@ -1,0 +1,14 @@
+# String Building Benchmark
+# Measures: string concatenation throughput
+
+func build_string(n: int) -> str:
+    s = ""
+    for i in range(n):
+        s += "item_" + str(i) + " "
+    return s
+
+start = clock()
+result = build_string(10000)
+elapsed = clock() - start
+print("len:", result.len())
+print("elapsed:", elapsed)

@@ -238,15 +238,30 @@ cargo test --release
   - Probes `pg1_slotmap`, `pg2_result`, `pg3_unwrapq`, `pg4_panic`, `pg5_bool` and all 5 showcase examples green.
   - Cross-compiled Windows binary `still_new.exe` verified on Windows without heap corruption.
 
+## v0.4.4 session log (enums with payloads + static traits — the user's roadmap item 4 Stage B; all compile work in the Linux Codespace)
+
+- **Enums with payloads (Stage A, already done in v0.4.3):** tagged-union runtime representation compatible with refcounting; pattern matching on enum variants with payloads (`Circle(Inner(1.0, 2.0))`, `Box(Shape.Point)`). Verified leak-free with AddressSanitizer on `probe_enum1` and `probe_enum2`: completely memory-safe. Conformance tests: `conformance/valid/enum_types.strc`, `conformance/invalid/enum_bad_variant.strc`, `conformance/invalid/enum_arity.strc`.
+
+- **Traits and impls (Stage B, new in v0.4.4):** soft keywords `trait` and `impl ... for ... :` parsed at top level without lexer keyword changes. `TraitInfo` tracks `(name, has_self, param_tys, ret_ty)`; `ImplDef` methods validate signatures and register directly into the struct's `methods` or `statics` lists for **static dispatch only** (no vtables). Two-pass collection (`collect_enums(); collect_structs(); collect_enums();`) handles cross-referencing. Method-ness and arity validated against trait signatures; missing method and signature mismatch rejected with helpful hints. Static methods callable as `Type.name()` or `Type.static_method(...)`; instance methods callable as `obj.method(...)`. Updated `check.rs` tuple pattern arity `(n, _, _)` → `(n, _, _, _)` for 4-element `TraitInfo.methods` tuples; fixed enum temp leaks in `drop_stmt` and `need_enum` with `first` branch tracker.
+
+- **Cross-referencing:** enum/struct cross-referencing verified via two-pass collection. Full regression passed in Codespace under both TCC and strict GCC (`STILL_CC=gcc cargo test --test conformance`): 62/62 green (including 3 new trait tests: `trait_types`, `missing_method`, `bad_sig`, plus `static_dispatch`).
+
+- **Updated conformance:** Added `conformance/valid/trait_types.strc` (+expected), `conformance/valid/trait_static_dispatch.strc` (+expected), `conformance/invalid/trait_missing_method.strc` (+expected), `conformance/invalid/trait_bad_sig.strc` (+expected), `conformance/invalid/trait_static_wrong_call.strc` (+expected).
+
+- **Worklog and roadmap:** Updated `ROADMAP-STATUS.md` documenting enums with payloads and static traits; updated TextMate syntax and LSP completion keywords (`enum`, `trait`, `impl`).
+
+- **Known deferrals:** Closures (item 3) — capture semantics interact with the ownership/refcount emission (who owns the environment, when it is released). A half-implementation would leak or double-release. Needs the environment-as-value design first. Design note stays in worklog. Next priority after this session.
+
+- **Verification:** `cargo test` all suites green (conformance + unit + lsp + python_bridge); `STILL_CC=gcc cargo test --test conformance` 62/62 green; `still test conformance` passes; all 5 showcase examples run clean.
+
 ## Next steps (priority order)
 
-0. DONE (item 1 & 2): methods mutate `self` in place; in-place element writes; loop proxies; generic containers (`SlotMap<T>`, `Option<T>`, `Result<T,E>`, `Stack<T>`, `Queue<T>`), postfix unwrap `?`, `as_var` borrow-temp UAF fix.
-1. **Enums with payloads + traits** (the user's item 4, before closures): tagged-union runtime representation compatible with refcounting; pattern matching on enum variants with payloads; trait definitions with method signatures, struct implementation of traits (`impl Trait for Struct`), and trait object / dynamic dispatch or static monomorphization.
-2. Closures: capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures.
-3. Match follow-ups: struct patterns + exhaustiveness (tuple/list landed in v0.4.0; contains-based scalar lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
-4. Threading design (design doc before code — the user ordered design-first), then real benchmarks for the rendering engine (cornell baseline: 0.321 Mray/s, 692 s for the standard scene — plenty of headroom) and a cheap stepping debugger.
-5. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces). Includes the Qt-like GUI library the user asked for — design it on top of the existing gui.strc command model.
-6. `still fmt` / REPL / package manager; C-header binding generator (user items 9–10).
-7. Conformance growth toward 500 (59 today).
-8. LSP follow-ups: cross-module completion and references (single-file references/rename shipped in v0.4.0).
-9. String-fold follow-up: add a string-building bench to the CI gate so `+=` folding has a regression number (fold evidence is documented in RELEASE_NOTES for v0.4.0).
+0. DONE (items 1 & 2): methods mutate `self` in place; in-place element writes; loop proxies; generic containers (`SlotMap<T>`, `Option<T>`, `Result<T,E>`, `Stack<T>`, `Queue<T>`), postfix unwrap `?`, `as_var` borrow-temp UAF fix; enums with payloads + static traits (item 4 Stage B).
+1. **Closures** (the user's item 3): capture-by-value with an environment-ownership design compatible with the refcounting emitter; then stdlib sort/map/filter/each over closures.
+2. Match follow-ups: struct patterns + exhaustiveness (tuple/list landed in v0.4.0; contains-based scalar lowering is O(arms x literals), a real C switch needs a jump-table emitter path).
+3. Threading design (design doc before code — the user ordered design-first), then real benchmarks for the rendering engine (cornell baseline: 0.321 Mray/s, 692 s for the standard scene — plenty of headroom) and a cheap stepping debugger.
+4. Runtime backends for the typechecked-only stdlib stubs (gui/audio/net/web/ipc open real handles): Windows-only Win32/DirectX C code can be authored and Committed from the Codespace but only exercised on Windows boxes (Wine tcc path can smoke-test pure-C runtime pieces). Includes the Qt-like GUI library the user asked for — design it on top of the existing gui.strc command model.
+5. `still fmt` / REPL / package manager; C-header binding generator (user items 9–10).
+6. Conformance growth toward 500 (62 today).
+7. LSP follow-ups: cross-module completion and references (single-file references/rename shipped in v0.4.0).
+8. String-fold follow-up: add a string-building bench to the CI gate so `+=` folding has a regression number (fold evidence is documented in RELEASE_NOTES for v0.4.0).

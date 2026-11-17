@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::check::sanitize;
+use crate::check::{enum_payload_field, sanitize};
 use crate::span::Span;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -142,6 +142,8 @@ fn clone_program(p: &Program) -> Program {
         funcs: p.funcs.clone(),
         externs: p.externs.clone(),
         structs: p.structs.clone(),
+        enums: p.enums.clone(),
+        traits: p.traits.clone(),
         globals: p.globals.clone(),
         global_order: p.global_order.clone(),
         module_inits: p.module_inits.clone(),
@@ -406,6 +408,12 @@ impl Emitter {
         match ty {
             Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => format!("if ({v}) still_release({v});", v = v),
             Ty::Named(q) => {
+                if let Some(ei) = self.prog.enums.get(q) {
+                    if self.enum_has_refs(ei) {
+                        return format!("still_en_{}_drop(&{v});", sanitize(q), v = v);
+                    }
+                    return String::new();
+                }
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -430,6 +438,12 @@ impl Emitter {
                         format!("if ({v}) still_release({v});", v = v)
                     }
                     Ty::Named(ref q) => {
+                        if let Some(ei) = self.prog.enums.get(q) {
+                            if self.enum_has_refs(ei) {
+                                return format!("if ({v}.has) still_en_{}_drop(&{v}.v);", sanitize(q), v = v);
+                            }
+                            return String::new();
+                        }
                         let si = self.prog.structs.get(q).cloned();
                         if let Some(si) = si {
                             if si.is_soa {
@@ -458,6 +472,11 @@ impl Emitter {
         si.fields.iter().any(|(_, t)| self.ty_has_refs(&resolve_deep(t)))
     }
 
+    /// True when the enum has any refcounted payload in any variant.
+    fn enum_has_refs(&self, ei: &EnumInfo) -> bool {
+        ei.variants.iter().any(|(_, pts)| pts.iter().any(|t| self.ty_has_refs(&resolve_deep(t))))
+    }
+
     fn tuple_has_refs(&self, ts: &[Ty]) -> bool {
         ts.iter().any(|t| self.ty_has_refs(&resolve_deep(t)))
     }
@@ -466,12 +485,16 @@ impl Emitter {
         match resolve(t) {
             Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => true,
             Ty::Nullable(b) => self.ty_has_refs(&b),
-            Ty::Named(q) => self
-                .prog
-                .structs
-                .get(&q)
-                .map(|s| s.is_soa || self.struct_has_refs(s))
-                .unwrap_or(false),
+            Ty::Named(q) => {
+                if let Some(ei) = self.prog.enums.get(&q) {
+                    return self.enum_has_refs(ei);
+                }
+                self.prog
+                    .structs
+                    .get(&q)
+                    .map(|s| s.is_soa || self.struct_has_refs(s))
+                    .unwrap_or(false)
+            }
             Ty::Tuple(ts) => self.tuple_has_refs(&ts),
             _ => false,
         }
@@ -502,6 +525,7 @@ impl Emitter {
             }
             Ty::Tuple(_) => "{0}".into(),
             Ty::Var(_) => "0".into(),
+            Ty::Func(_, _) => "NULL".into(),
         }
     }
 
@@ -544,6 +568,10 @@ impl Emitter {
                 }
             }
             Ty::Named(q) => {
+                if self.prog.enums.contains_key(&q) {
+                    self.need_enum(&q);
+                    return format!("still_en_{}", sanitize(&q));
+                }
                 let si = self.prog.structs.get(&q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -555,6 +583,7 @@ impl Emitter {
                 format!("still_st_{}", sanitize(&q))
             }
             Ty::Var(_) => "int64_t".into(),
+            Ty::Func(_, _) => "void*".into(),
         }
     }
 
@@ -603,6 +632,10 @@ impl Emitter {
                 }
             }
             Ty::Named(q) => {
+                if self.prog.enums.contains_key(&q) {
+                    self.need_enum(&q);
+                    return format!("still_en_{}_eqv", sanitize(&q));
+                }
                 let si = self.prog.structs.get(&q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -615,6 +648,7 @@ impl Emitter {
             }
             Ty::NoneTy => "still_ptr_eq".into(),
             Ty::Var(_) => "still_eq_i64".into(),
+            Ty::Func(_, _) => "still_ptr_eq".into(),
         }
     }
 
@@ -644,6 +678,12 @@ impl Emitter {
             }
             Ty::Any => "(still_any*)still_retain(_v)".into(),
             Ty::Named(ref q) => {
+                if let Some(ei) = self.prog.enums.get(q) {
+                    if self.enum_has_refs(ei) {
+                        return format!("still_en_{}_clone(&_v)", sanitize(q));
+                    }
+                    return "_v".into();
+                }
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -666,6 +706,16 @@ impl Emitter {
                 match i {
                     Ty::Str | Ty::List(_) | Ty::Dict(..) => self.retain_expr(&i),
                     Ty::Named(ref q) => {
+                        if let Some(ei) = self.prog.enums.get(q) {
+                            if self.enum_has_refs(ei) {
+                                return format!(
+                                    "((still_opt_{tag}){{ .v = still_en_{q}_clone(&_v.v), .has = _v.has }})",
+                                    tag = ty_tag(&i),
+                                    q = sanitize(q)
+                                );
+                            }
+                            return "_v".into();
+                        }
                         let si = self.prog.structs.get(q).cloned();
                         if let Some(si) = si {
                             if si.is_soa {
@@ -703,6 +753,12 @@ impl Emitter {
         match t {
             Ty::Str | Ty::List(_) | Ty::Dict(..) | Ty::Any => "still_release(_v)".into(),
             Ty::Named(ref q) => {
+                if let Some(ei) = self.prog.enums.get(q) {
+                    if self.enum_has_refs(ei) {
+                        return format!("still_en_{}_drop(&_v)", sanitize(q));
+                    }
+                    return "((void)_v)".into();
+                }
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -725,6 +781,12 @@ impl Emitter {
                 match i {
                     Ty::Str | Ty::List(_) | Ty::Dict(..) => "still_release(_v)".into(),
                     Ty::Named(ref q) => {
+                        if let Some(ei) = self.prog.enums.get(q) {
+                            if self.enum_has_refs(ei) {
+                                return format!("if (_v.has) still_en_{}_drop(&_v.v)", sanitize(q));
+                            }
+                            return "((void)_v)".into();
+                        }
                         let si = self.prog.structs.get(q).cloned();
                         if let Some(si) = si {
                             if si.is_soa {
@@ -1056,6 +1118,113 @@ impl Emitter {
             "static bool {c}_eqv({c} a, {c} b) {{ return {c}_eq(&a, &b); }}\n",
             c = cname
         ));
+        self.helpers.push(code);
+    }
+
+    /// Emit the tagged representation of an enum: a flat struct with a
+    /// `tag` int plus one field per payload slot (`v_{Variant}_{i}`), and
+    /// variant-gated drop/clone/eq so only the ACTIVE variant's payloads are
+    /// touched (inactive slots are zeroed garbage and must never be
+    /// released or retained).
+    fn need_enum(&mut self, qual: &str) {
+        let ei = match self.prog.enums.get(qual).cloned() {
+            Some(e) => e,
+            None => return,
+        };
+        let key = format!("en_{}", sanitize(qual));
+        if !self.helper_keys.insert(key.clone()) {
+            return;
+        }
+        let mut code = String::new();
+        let cname = format!("still_en_{}", sanitize(qual));
+        code.push_str("typedef struct {\n");
+        code.push_str("    int32_t tag;\n");
+        let mut fields: Vec<(String, Ty)> = Vec::new();
+        for (vi, (vname, pts)) in ei.variants.iter().enumerate() {
+            let _ = vi;
+            for (pi, pt) in pts.iter().enumerate() {
+                let fname = crate::check::enum_payload_field(vname, pi);
+                let ct = self.ctype(&resolve_deep(pt));
+                code.push_str(&format!("    {} {};\n", ct, fname));
+                fields.push((fname, resolve_deep(pt)));
+            }
+        }
+        code.push_str(&format!("}} {};\n", cname));
+        let has_refs = self.enum_has_refs(&ei);
+        if has_refs {
+            code.push_str(&format!("static void {c}_drop({c}* v) {{\n", c = cname));
+            let mut first = true;
+            for (vi, (vname, pts)) in ei.variants.iter().enumerate() {
+                if !pts.iter().any(|t| self.ty_has_refs(&resolve_deep(t))) {
+                    continue;
+                }
+                if first {
+                    code.push_str(&format!("    if (v->tag == {}) {{\n", vi));
+                    first = false;
+                } else {
+                    code.push_str(&format!("    }} else if (v->tag == {}) {{\n", vi));
+                }
+                for (pi, pt) in pts.iter().enumerate() {
+                    let rel = self.release_expr(&resolve_deep(pt));
+                    let fname = crate::check::enum_payload_field(vname, pi);
+                    let ct = self.ctype(&resolve_deep(pt));
+                    code.push_str(&format!("        {{ {} _v = v->{}; (void)_v; {}; }}\n", ct, fname, rel));
+                }
+            }
+            if !first {
+                code.push_str("    }\n");
+            }
+            code.push_str("}\n");
+            code.push_str(&format!("static {c} {c}_clone({c}* v) {{\n    {c} r = *v;\n", c = cname));
+            let mut first = true;
+            for (vi, (vname, pts)) in ei.variants.iter().enumerate() {
+                if !pts.iter().any(|t| self.ty_has_refs(&resolve_deep(t))) {
+                    continue;
+                }
+                if first {
+                    code.push_str(&format!("    if (v->tag == {}) {{\n", vi));
+                    first = false;
+                } else {
+                    code.push_str(&format!("    }} else if (v->tag == {}) {{\n", vi));
+                }
+                for (pi, pt) in pts.iter().enumerate() {
+                    let ret = self.retain_expr(&resolve_deep(pt));
+                    let fname = crate::check::enum_payload_field(vname, pi);
+                    let ct = self.ctype(&resolve_deep(pt));
+                    code.push_str(&format!("        {{ {} _v = r.{}; (void)_v; r.{} = {}; }}\n", ct, fname, fname, ret));
+                }
+            }
+            if !first {
+                code.push_str("    }\n");
+            }
+            code.push_str("    return r;\n}\n");
+        } else {
+            code.push_str(&format!("static void {c}_drop({c}* v) {{ (void)v; }}\n", c = cname));
+            code.push_str(&format!("static {c} {c}_clone({c}* v) {{ return *v; }}\n", c = cname));
+        }
+        code.push_str(&format!("static bool {c}_eq({c}* a, {c}* b) {{\n    if (a->tag != b->tag) return false;\n", c = cname));
+        for (vi, (vname, pts)) in ei.variants.iter().enumerate() {
+            if vi == 0 {
+                code.push_str(&format!("    if (a->tag == 0) {{ return true"));
+            } else {
+                code.push_str(&format!("    }} else if (a->tag == {}) {{ return true", vi));
+            }
+            for (pi, pt) in pts.iter().enumerate() {
+                let eqf = self.eq_fn(&resolve_deep(pt));
+                let fname = crate::check::enum_payload_field(vname, pi);
+                code.push_str(&format!(" && {}(a->{f}, b->{f})", eqf, f = fname));
+            }
+            code.push_str(";\n");
+        }
+        if !ei.variants.is_empty() {
+            code.push_str("    }\n");
+        }
+        code.push_str("    return true;\n}\n");
+        code.push_str(&format!(
+            "static bool {c}_eqv({c} a, {c} b) {{ return {c}_eq(&a, &b); }}\n",
+            c = cname
+        ));
+        let _ = fields;
         self.helpers.push(code);
     }
 }
@@ -2037,6 +2206,7 @@ impl Emitter {
             Ty::Tuple(_) => "true".into(),
             Ty::NoneTy => "false".into(),
             Ty::Var(_) => format!("(({}) != 0)", e),
+            Ty::Func(_, _) => format!("(({}) != NULL)", e),
         }
     }
 
@@ -2259,6 +2429,35 @@ impl Emitter {
                 }
                 t
             }
+            X::EnumLit(qual, vidx, payloads) => {
+                let (vname, pts) = {
+                    let ei = match self.prog.enums.get(qual) {
+                        Some(e) => e,
+                        None => return format!("0 /* unknown enum {} */", qual),
+                    };
+                    match ei.variants.get(*vidx) {
+                        Some((n, p)) => (n.clone(), p.clone()),
+                        None => return format!("0 /* bad variant {} */", qual),
+                    }
+                };
+                self.need_enum(qual);
+                let cname = format!("still_en_{}", sanitize(qual));
+                let t = self.newtmp();
+                self.set_line(&sp);
+                let mut inits: Vec<String> = vec![format!(".tag = {}", vidx)];
+                for (i, pv) in payloads.iter().enumerate() {
+                    let e = self.emit_expr(pv);
+                    let fty = resolve_deep(&pts[i]);
+                    let vty = resolve_deep(&pv.ty);
+                    inits.push(format!(".{} = {}", enum_payload_field(&vname, i), self.adapt_owned(&e, &vty, &fty)));
+                }
+                self.line(format!("{} {} = {{ {} }};", cname, t, inits.join(", ")));
+                let has_refs = pts.iter().any(|f| self.ty_has_refs(&resolve_deep(f)));
+                if has_refs {
+                    self.reg_temp(&t, Ty::Named(qual.clone()));
+                }
+                t
+            }
             X::SoaNew(qual, cap) => {
                 self.need_soa(qual);
                 let si = self.prog.structs.get(qual).cloned();
@@ -2428,6 +2627,20 @@ impl Emitter {
                 } else {
                     call
                 }
+            }
+            X::CallFuncValue(fv, args) => {
+                let fexpr = self.emit_expr(fv);
+                let cargs: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
+                let fty = resolve_deep(&fv.ty);
+                let cast = match fty {
+                    Ty::Func(params, ret) => {
+                        let pt: Vec<String> = params.iter().map(|p| self.ctype(&resolve_deep(p))).collect();
+                        let rt = self.ctype(&resolve_deep(&ret));
+                        format!("{} (*)({})", rt, pt.join(", "))
+                    }
+                    _ => "void*".to_string(),
+                };
+                format!("(({}){})({})", cast, fexpr, cargs.join(", "))
             }
             X::CallExtern(name, args) => {
                 let ed = self.extern_map.get(name).cloned();
@@ -2661,6 +2874,7 @@ impl Emitter {
                 let e = self.emit_expr(v);
                 format!("(double)({})", e)
             }
+            X::FuncValue(name) => format!("(void*){}", name),
             X::AsStr(v) => self.emit_as_str(v),
             X::Method(recv, name, args) => self.emit_method(recv, name, args, &sp),
             X::Builtin(kind, args) => self.emit_builtin(*kind, args, &sp, tx),
@@ -2758,6 +2972,7 @@ impl Emitter {
             Ty::NoneTy => "still_sb_add_none".into(),
             Ty::Any => "still_tostr_add_a".into(),
             Ty::Var(_) => "still_sb_add_int".into(),
+            Ty::Func(_, _) => "still_sb_add_str".into(),
             Ty::List(e) => {
                 let et = resolve_deep(e);
                 let tag = ty_tag(&et);
@@ -2817,6 +3032,44 @@ impl Emitter {
                 format!("still_tostr_add_tup_{}", ttag)
             }
             Ty::Named(q) => {
+                if let Some(ei) = self.prog.enums.get(q).cloned() {
+                    let cname = sanitize(q);
+                    let key = format!("toen_{}", cname);
+                    if self.helper_keys.insert(key.clone()) {
+                        let mut body = String::new();
+                        for (vi, (vname, pts)) in ei.variants.iter().enumerate() {
+                            if vi == 0 {
+                                body.push_str(&format!("    if (_p.tag == 0) {{\n"));
+                            } else {
+                                body.push_str(&format!("    }} else if (_p.tag == {}) {{\n", vi));
+                            }
+                            if pts.is_empty() {
+                                body.push_str(&format!("        still_sb_raw(sb, \"{}\");\n", vname));
+                            } else {
+                                body.push_str(&format!("        still_sb_raw(sb, \"{}(\");\n", vname));
+                                for (pi, pt) in pts.iter().enumerate() {
+                                    let fadd = self.tostr_fn(&resolve_deep(pt));
+                                    let fname = enum_payload_field(vname, pi);
+                                    if pi > 0 {
+                                        body.push_str("        still_sb_raw(sb, \", \");\n");
+                                    }
+                                    body.push_str(&format!("        {fadd}(sb, _p.{f});\n", fadd = fadd, f = fname));
+                                }
+                                body.push_str("        still_sb_c(sb, ')');\n");
+                            }
+                        }
+                        if !ei.variants.is_empty() {
+                            body.push_str("    }\n");
+                        }
+                        let code = format!(
+                            "static void still_tostr_add_en_{c}(still_sb* sb, still_en_{c} _p) {{\n{body}}}\n",
+                            c = cname,
+                            body = body
+                        );
+                        self.helpers.push(code);
+                    }
+                    return format!("still_tostr_add_en_{}", cname);
+                }
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -3142,6 +3395,44 @@ impl Emitter {
                 format!("still_print_tup_{}", ttag)
             }
             Ty::Named(q) => {
+                if let Some(ei) = self.prog.enums.get(q).cloned() {
+                    let cname = sanitize(q);
+                    let key = format!("pen_{}", cname);
+                    if self.helper_keys.insert(key.clone()) {
+                        let mut body = String::new();
+                        for (vi, (vname, pts)) in ei.variants.iter().enumerate() {
+                            if vi == 0 {
+                                body.push_str(&format!("    if (_p.tag == 0) {{\n"));
+                            } else {
+                                body.push_str(&format!("    }} else if (_p.tag == {}) {{\n", vi));
+                            }
+                            if pts.is_empty() {
+                                body.push_str(&format!("        fputs(\"{}\", stdout);\n", vname));
+                            } else {
+                                body.push_str(&format!("        fputs(\"{}(\", stdout);\n", vname));
+                                for (pi, pt) in pts.iter().enumerate() {
+                                    let fpr = self.repr_fn(&resolve_deep(pt));
+                                    let fname = enum_payload_field(vname, pi);
+                                    if pi > 0 {
+                                        body.push_str("        fputc(',', stdout), fputc(' ', stdout);\n");
+                                    }
+                                    body.push_str(&format!("        {}(_p.{});\n", fpr, fname));
+                                }
+                                body.push_str("        fputc(')', stdout);\n");
+                            }
+                        }
+                        if !ei.variants.is_empty() {
+                            body.push_str("    }\n");
+                        }
+                        let code = format!(
+                            "static void still_print_en_{c}(still_en_{c} _p) {{\n{body}}}\n",
+                            c = cname,
+                            body = body
+                        );
+                        self.helpers.push(code);
+                    }
+                    return format!("still_print_en_{}", cname);
+                }
                 let si = self.prog.structs.get(q).cloned();
                 if let Some(si) = si {
                     if si.is_soa {
@@ -3247,6 +3538,7 @@ impl Emitter {
                 }
             }
             Ty::Var(_) => "still_print_int".into(),
+            Ty::Func(_, _) => "still_print_str".into(),
         }
     }
 

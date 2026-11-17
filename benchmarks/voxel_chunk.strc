@@ -1,0 +1,20 @@
+# Voxel Chunk Generator Benchmark
+# Measures: chunk generation throughput
+
+import time
+
+func gen_chunk(size: int) -> int:
+    total = 0
+    for x in range(size):
+        for y in range(size):
+            for z in range(size):
+                # Simple noise-like value
+                v = (x * 31 + y * 17 + z * 13) % 256
+                total += v
+    return total
+
+start = clock()
+result = gen_chunk(32)
+elapsed = clock() - start
+print("result:", result)
+print("elapsed:", elapsed)

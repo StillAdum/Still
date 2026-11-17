@@ -1,0 +1,16 @@
+trait Shape:
+    func area(self) -> float
+    static func make(x: int, y: int) -> self
+
+type Circle:
+    radius: float = 1.0
+
+impl Shape for Circle:
+    func area(self) -> float:
+        return 3.14 * self.radius * self.radius
+    static func make(radius: float) -> Circle:
+        return Circle(radius)
+
+c = Circle.make(5.0)
+print(c.area())
+print(Circle.make(3.0).area())
