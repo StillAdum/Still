@@ -79,10 +79,21 @@ async function checkDocument(doc) {
   diagnosticCollection.set(doc.uri, diags);
 }
 
+const symbolCache = new Map();
+
 async function fileSymbols(file) {
+  if (symbolCache.has(file)) {
+    // refresh in background
+    runStill(['ide', 'symbols', file]).then(res => {
+      try { symbolCache.set(file, JSON.parse(res.stdout).symbols || []); } catch (e) {}
+    }).catch(() => {});
+    return symbolCache.get(file);
+  }
   const res = await runStill(['ide', 'symbols', file]);
   try {
-    return JSON.parse(res.stdout).symbols || [];
+    const syms = JSON.parse(res.stdout).symbols || [];
+    symbolCache.set(file, syms);
+    return syms;
   } catch (e) {
     return [];
   }
@@ -170,6 +181,7 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
+      symbolCache.delete(e.document.uri.fsPath);
       const c = checkConfig();
       if (!c.type) return;
       if (checkTimer) clearTimeout(checkTimer);
