@@ -1,2 +1,0 @@
-main
-/tmp/conformance/invalid/trait_static_wrong_call.strc:12:5: error: 'make' is a static method of 'Circle' — call it as 'Circle.make'(...)

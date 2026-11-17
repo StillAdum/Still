@@ -7,6 +7,5 @@ type Point:
     y: int
 
 impl Describable for Point:
-    // Missing category() method
     func describe(self) -> str:
-        return "Point(" + string(self.x) + ", " + string(self.y) + ")"
+        return "Point(" + str(self.x) + ", " + str(self.y) + ")"
