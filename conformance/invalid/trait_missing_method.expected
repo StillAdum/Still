@@ -1,1 +1,1 @@
-conformance/invalid/trait_missing_method.strc:9:1: error: impl 'Describable' for 'Point' is missing method 'category'
+impl 'Describable' for 'Point' is missing method 'category'

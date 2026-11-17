@@ -1,1 +1,1 @@
-conformance/invalid/trait_bad_sig.strc:10:5: error: method 'describe' does not match trait 'Describable': returns int but the trait declares str
+method 'describe' does not match trait 'Describable': returns int but the trait declares str
