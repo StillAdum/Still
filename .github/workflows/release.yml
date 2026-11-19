@@ -37,6 +37,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
 
+      - name: Print example diag logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path . -Filter *.log | ForEach-Object {
+            Write-Host "--- $($_.Name) ---"
+            Get-Content $_.FullName | Select-Object -Last 10
+          }
+
       - name: Package Windows zip
         shell: pwsh
         run: |
