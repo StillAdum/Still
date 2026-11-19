@@ -164,7 +164,7 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
 
     typedef void* (WINAPI *OpenFn)(const wchar_t*, DWORD, const wchar_t*, const wchar_t*, DWORD);
     typedef void* (WINAPI *ConnectFn)(void*, const wchar_t*, unsigned short, DWORD);
-    typedef void* (WINAPI *OpenReqFn)(void*, const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t*, DWORD);
+    typedef void* (WINAPI *OpenReqFn)(void*, const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t*, const wchar_t**, DWORD);
     typedef BOOL (WINAPI *AddHdrFn)(void*, const wchar_t*, DWORD, DWORD);
     typedef BOOL (WINAPI *SendFn)(void*, const wchar_t*, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
     typedef BOOL (WINAPI *RecvFn)(void*, LPVOID, DWORD, DWORD);
@@ -250,7 +250,7 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
         hConnect = wConnect(hSession, w_host, (unsigned short)port, 0);
         if (!hConnect) { snprintf(werr, sizeof(werr), "cannot connect to %s:%d", host, port); net_set_err(werr); break; }
         net_trace("opening request");
-        hRequest = wOpenReq(hConnect, w_method, w_path, NULL, NULL,
+        hRequest = wOpenReq(hConnect, w_method, w_path, NULL, NULL, NULL,
                             secure ? STIL_WINHTTP_FLAG_SECURE : 0);
         if (!hRequest) { net_set_err("WinHttpOpenRequest failed"); break; }
         net_trace("setting options + headers");
