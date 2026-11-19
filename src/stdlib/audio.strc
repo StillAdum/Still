@@ -1,3 +1,62 @@
+# audio — WAV playback + melody synthesis (real since v0.6.0)
+#
+# Windows backend (winmm): play WAV files from disk or synthesized melodies
+# from memory. Playback is asynchronous and single-channel — starting a new
+# sound stops the previous one (call stop() to silence). On other platforms
+# the functions degrade gracefully (available() is false, play_* return false).
+#
+# Melody spec format: "freq:ms,freq:ms,..." — frequency in Hz, duration in
+# milliseconds. A frequency of 0 is a rest. Example: "440:500,0:100,550:500".
+
+extern "C":
+    func still_audio_available() -> int
+    func still_audio_stop()
+    func still_audio_play_file(path: str, loop: int) -> int
+    func still_audio_play_melody(spec: str, loop: int) -> int
+
+func available() -> bool:
+    return still_audio_available() == 1
+
+func stop():
+    still_audio_stop()
+
+func play_file(path: str, loop: bool = false) -> bool:
+    n = 0
+    if loop:
+        n = 1
+    return still_audio_play_file(path, n) == 0
+
+func play_melody(spec: str, loop: bool = false) -> bool:
+    n = 0
+    if loop:
+        n = 1
+    return still_audio_play_melody(spec, n) == 0
+
+# Build a melody spec from a list of Hz values and a per-note duration in ms.
+# e.g. melody([440, 550, 660], 300) -> "440:300,550:300,660:300"
+func melody(notes: [float], note_ms: int) -> str:
+    out = ""
+    for i in range(len(notes)):
+        if i > 0:
+            out += ","
+        out += "{notes[i]}:{note_ms}"
+    return out
+
+# Build a melody spec from alternating (hz, ms) pairs.
+func melody_timed(hz: [float], ms: [int]) -> str:
+    out = ""
+    n = len(hz)
+    if len(ms) < n:
+        n = len(ms)
+    for i in range(n):
+        if i > 0:
+            out += ","
+        out += "{hz[i]}:{ms[i]}"
+    return out
+
+# ---------------------------------------------------------------------------
+# Legacy spatial-audio kit (kept for compatibility; pure math, no backend).
+
 use math
 use vec
 
@@ -49,12 +108,4 @@ func synth_sine_wave(freq: float, duration_secs: float, sample_rate: int = 44100
         t = float(i) / float(sample_rate)
         sample = sin(2.0 * 3.1415926535 * freq * t)
         push(samples, sample)
-    return samples
-
-func synth_noise(duration_secs: float, sample_rate: int = 44100) -> [float]:
-    samples = []
-    total_samples = int(duration_secs * float(sample_rate))
-    for i in range(total_samples):
-        val = float((i * 1103515245 + 12345) % 65536) / 32768.0 - 1.0
-        push(samples, val)
     return samples

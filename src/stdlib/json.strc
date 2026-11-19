@@ -1,0 +1,540 @@
+# json — JSON parsing and serialization, pure Still (v0.6.0)
+#
+# parse(text) -> JsonResult with .ok, .value (any: dict/list/str/int/float/
+# bool/none) and .error ("" when ok). The parser is strict RFC 8259: it
+# handles \uXXXX escapes (surrogate pairs included), nested containers,
+# numbers with exponents, and reports the byte offset of syntax errors.
+# stringify(v) turns any JSON-shaped value back into compact JSON text.
+#
+# Safe access helpers avoid the panics that raw `any` indexing can produce on
+# missing keys or wrong types: get_str / get_int / get_float / get_bool take
+# fallbacks; get_list / get_dict / get_any return `any` values you can then
+# index or iterate (with len + dict_key_at). get_at walks a path of keys.
+
+type JsonResult:
+    ok: bool
+    value: any
+    error: str
+
+type JsonParser:
+    text: str
+    pos: int
+    err: str
+
+    func at_end(self) -> bool:
+        return self.pos >= len(self.text)
+
+    func peek(self) -> str:
+        if self.pos >= len(self.text):
+            return ""
+        return self.text[self.pos]
+
+    func peek_at(self, off: int) -> str:
+        if self.pos + off >= len(self.text):
+            return ""
+        return self.text[self.pos + off]
+
+    func skip_ws(self):
+        while self.pos < len(self.text):
+            c = self.text[self.pos]
+            if c == " " or c == "\t" or c == "\n" or c == "\r":
+                self.pos = self.pos + 1
+            else:
+                break
+
+    func fail_at(self, msg: str) -> bool:
+        if self.err == "":
+            self.err = "JSON error at offset {self.pos}: {msg}"
+        return false
+
+    func expect(self, c: str) -> bool:
+        if self.peek() != c:
+            return self.fail_at("expected {c}")
+        self.pos = self.pos + 1
+        return true
+
+    # Parse one JSON value. On failure self.err is set and none is returned.
+    func parse_value(self) -> any:
+        self.skip_ws()
+        if self.at_end():
+            self.fail_at("unexpected end of input")
+            return none
+        c = self.peek()
+        if c == "{{":
+            return self.parse_object()
+        if c == "[":
+            return self.parse_array()
+        if c == "\"":
+            return self.parse_string_raw()
+        if c == "t":
+            return self.parse_literal("true", true)
+        if c == "f":
+            return self.parse_literal("false", false)
+        if c == "n":
+            return self.parse_literal("null", none)
+        if c == "-" or (c >= "0" and c <= "9"):
+            return self.parse_number()
+        self.fail_at("unexpected character")
+        return none
+
+    func parse_literal(self, word: str, value: any) -> any:
+        for i in range(len(word)):
+            if self.peek() != word[i]:
+                self.fail_at("invalid literal, expected {word}")
+                return none
+            self.pos = self.pos + 1
+        return value
+
+    func parse_object(self) -> any:
+        if not self.expect("{{"):
+            return none
+        obj: {str: any} = {}
+        self.skip_ws()
+        if self.peek() == "}}":
+            self.pos = self.pos + 1
+            return obj
+        while true:
+            self.skip_ws()
+            if self.peek() != "\"":
+                self.fail_at("object keys must be strings")
+                return none
+            key = self.parse_string_raw()
+            if self.err != "":
+                return none
+            self.skip_ws()
+            if not self.expect(":"):
+                return none
+            val = self.parse_value()
+            if self.err != "":
+                return none
+            obj[key] = val
+            self.skip_ws()
+            c = self.peek()
+            if c == ",":
+                self.pos = self.pos + 1
+                continue
+            if c == "}}":
+                self.pos = self.pos + 1
+                return obj
+            self.fail_at("expected , or closing brace in object")
+            return none
+        return none
+
+    func parse_array(self) -> any:
+        if not self.expect("["):
+            return none
+        arr: [any] = []
+        self.skip_ws()
+        if self.peek() == "]":
+            self.pos = self.pos + 1
+            return arr
+        while true:
+            val = self.parse_value()
+            if self.err != "":
+                return none
+            push(arr, val)
+            self.skip_ws()
+            c = self.peek()
+            if c == ",":
+                self.pos = self.pos + 1
+                continue
+            if c == "]":
+                self.pos = self.pos + 1
+                return arr
+            self.fail_at("expected , or closing bracket in array")
+            return none
+        return none
+
+    func parse_string_raw(self) -> str:
+        # caller must have verified the opening quote
+        self.pos = self.pos + 1
+        out = ""
+        while true:
+            if self.at_end():
+                self.fail_at("unterminated string")
+                return out
+            c = self.text[self.pos]
+            if c == "\"":
+                self.pos = self.pos + 1
+                return out
+            if c == "\\":
+                nxt = self.peek_at(1)
+                if nxt == "":
+                    self.fail_at("unterminated escape")
+                    return out
+                if nxt == "\"":
+                    out += "\""
+                    self.pos = self.pos + 2
+                elif nxt == "\\":
+                    out += "\\"
+                    self.pos = self.pos + 2
+                elif nxt == "/":
+                    out += "/"
+                    self.pos = self.pos + 2
+                elif nxt == "b":
+                    out += chr(8)
+                    self.pos = self.pos + 2
+                elif nxt == "f":
+                    out += chr(12)
+                    self.pos = self.pos + 2
+                elif nxt == "n":
+                    out += chr(10)
+                    self.pos = self.pos + 2
+                elif nxt == "r":
+                    out += chr(13)
+                    self.pos = self.pos + 2
+                elif nxt == "t":
+                    out += chr(9)
+                    self.pos = self.pos + 2
+                elif nxt == "u":
+                    self.pos = self.pos + 2
+                    code = self.parse_hex4()
+                    if self.err != "":
+                        return out
+                    if code >= 55296 and code <= 56319:
+                        # high surrogate: expect a \uDC00-\uDFFF low surrogate
+                        if self.peek() == "\\" and self.peek_at(1) == "u":
+                            self.pos = self.pos + 2
+                            lo = self.parse_hex4()
+                            if self.err != "":
+                                return out
+                            if lo >= 56320 and lo <= 57343:
+                                code = 65536 + ((code - 55296) * 1024) + (lo - 56320)
+                            else:
+                                code = 65533
+                        else:
+                            code = 65533
+                    elif code >= 56320 and code <= 57343:
+                        code = 65533
+                    out += self.utf8_encode(code)
+                else:
+                    self.fail_at("unknown escape sequence")
+                    return out
+            else:
+                if ord(c) < 32:
+                    self.fail_at("raw control character in string")
+                    return out
+                out += c
+                self.pos = self.pos + 1
+        return out
+
+    func parse_hex4(self) -> int:
+        v = 0
+        for i in range(4):
+            c = self.peek()
+            hv = hex_digit(c)
+            if hv < 0:
+                self.fail_at("invalid unicode escape")
+                return -1
+            v = v * 16 + hv
+            self.pos = self.pos + 1
+        return v
+
+    func utf8_encode(self, code: int) -> str:
+        if code < 128:
+            return chr(code)
+        if code < 2048:
+            return chr(192 + int(code / 64)) + chr(128 + code % 64)
+        if code < 65536:
+            return chr(224 + int(code / 4096)) + chr(128 + int(code / 64) % 64) + chr(128 + code % 64)
+        return chr(240 + int(code / 262144)) + chr(128 + int(code / 4096) % 64) + chr(128 + int(code / 64) % 64) + chr(128 + code % 64)
+
+    func parse_number(self) -> any:
+        start = self.pos
+        if self.peek() == "-":
+            self.pos = self.pos + 1
+        digits = ""
+        while not self.at_end():
+            c = self.peek()
+            if c >= "0" and c <= "9":
+                digits += c
+                self.pos = self.pos + 1
+            else:
+                break
+        if len(digits) == 0:
+            self.fail_at("invalid number")
+            return none
+        is_float = false
+        if self.peek() == ".":
+            is_float = true
+            self.pos = self.pos + 1
+            frac = ""
+            while not self.at_end():
+                c = self.peek()
+                if c >= "0" and c <= "9":
+                    frac += c
+                    self.pos = self.pos + 1
+                else:
+                    break
+            if len(frac) == 0:
+                self.fail_at("digits required after decimal point")
+                return none
+        if self.peek() == "e" or self.peek() == "E":
+            is_float = true
+            self.pos = self.pos + 1
+            if self.peek() == "+" or self.peek() == "-":
+                self.pos = self.pos + 1
+            expo = ""
+            while not self.at_end():
+                c = self.peek()
+                if c >= "0" and c <= "9":
+                    expo += c
+                    self.pos = self.pos + 1
+                else:
+                    break
+            if len(expo) == 0:
+                self.fail_at("digits required in exponent")
+                return none
+        raw = self.text[start:self.pos]
+        if is_float:
+            return float(raw)
+        # very long integers keep full precision as floats
+        if len(digits) > 18:
+            return float(raw)
+        return int(raw)
+
+func hex_digit(c: str) -> int:
+    digits = "0123456789abcdef"
+    for i in range(16):
+        if c == digits[i]:
+            return i
+    caps = "ABCDEF"
+    for i in range(6):
+        if c == caps[i]:
+            return 10 + i
+    return -1
+
+# Parse a JSON document. Check .ok, then use .value.
+func parse(text: str) -> JsonResult:
+    p = JsonParser(text, 0, "")
+    val = p.parse_value()
+    if p.err != "":
+        return JsonResult(false, none, p.err)
+    p.skip_ws()
+    if not p.at_end():
+        return JsonResult(false, val, "JSON error at offset {p.pos}: unexpected trailing characters")
+    return JsonResult(true, val, "")
+
+func valid(text: str) -> bool:
+    r = parse(text)
+    return r.ok
+
+# --------------------------------------------------------------------------
+# Safe access helpers. They never panic: wrong types or missing keys return
+# the fallback. `key in v` is the panic-free membership test for any dicts.
+
+func get_any(v: any, key: str, fallback: any = none) -> any:
+    if v is none:
+        return fallback
+    if type_of(v) != "dict":
+        return fallback
+    if not (key in v):
+        return fallback
+    return v[key]
+
+func get_str(v: any, key: str, fallback: str = "") -> str:
+    x = get_any(v, key)
+    if x is none:
+        return fallback
+    t = type_of(x)
+    if t == "str":
+        return str(x)
+    if t == "int" or t == "float" or t == "bool":
+        return str(x)
+    return fallback
+
+func get_int(v: any, key: str, fallback: int = 0) -> int:
+    x = get_any(v, key)
+    if x is none:
+        return fallback
+    t = type_of(x)
+    if t == "int":
+        return int(x)
+    if t == "float":
+        return int(x)
+    if t == "str":
+        return int(x)
+    return fallback
+
+func get_float(v: any, key: str, fallback: float = 0.0) -> float:
+    x = get_any(v, key)
+    if x is none:
+        return fallback
+    t = type_of(x)
+    if t == "float" or t == "int" or t == "str":
+        return float(x)
+    return fallback
+
+func get_bool(v: any, key: str, fallback: bool = false) -> bool:
+    x = get_any(v, key)
+    if x is none:
+        return fallback
+    t = type_of(x)
+    if t == "bool":
+        return x == true
+    if t == "int":
+        return x != 0
+    return fallback
+
+func get_list(v: any, key: str, fallback: any = none) -> any:
+    x = get_any(v, key)
+    if x is none:
+        return fallback
+    if type_of(x) == "list":
+        return x
+    return fallback
+
+func get_dict(v: any, key: str, fallback: any = none) -> any:
+    x = get_any(v, key)
+    if x is none:
+        return fallback
+    if type_of(x) == "dict":
+        return x
+    return fallback
+
+# Walk a path of keys: get_at(post, ["data", "user", "name"])
+func get_at(v: any, path: [str]) -> any:
+    cur = v
+    for k in path:
+        cur = get_any(cur, k)
+        if cur is none:
+            return none
+    return cur
+
+# The i-th key of a dict held in `any`: dict_key_at(v, i) — pairs with len(v).
+# This is a v0.6.0 language builtin (backed by still_dict_key_at in the
+# runtime); it is how Still programs iterate dict keys carried in `any`.
+
+# --------------------------------------------------------------------------
+# Serialization: compact JSON from JSON-shaped values (dict/list/str/int/
+# float/bool/none). Unknown types serialize as null.
+
+func stringify(v: any) -> str:
+    sb = StringBuilder([])
+    write_value(sb, v)
+    return sb.to_string()
+
+type StringBuilder:
+    parts: [str]
+
+    func append(self, s: str):
+        push(self.parts, s)
+
+    func to_string(self) -> str:
+        return "".join(self.parts)
+
+func write_value(sb: StringBuilder, v: any):
+    if v is none:
+        sb.append("null")
+        return
+    t = type_of(v)
+    if t == "str":
+        write_string(sb, str(v))
+        return
+    if t == "int":
+        sb.append(str(int(v)))
+        return
+    if t == "float":
+        f = float(v)
+        if f == int(f) and f < 1e15 and f > -1e15:
+            sb.append("{int(f)}.0")
+        else:
+            sb.append(str(f))
+        return
+    if t == "bool":
+        if v == true:
+            sb.append("true")
+        else:
+            sb.append("false")
+        return
+    if t == "list":
+        sb.append("[")
+        n = len(v)
+        for i in range(n):
+            if i > 0:
+                sb.append(",")
+            write_value(sb, v[i])
+        sb.append("]")
+        return
+    if t == "dict":
+        sb.append("{{")
+        n = len(v)
+        for i in range(n):
+            if i > 0:
+                sb.append(",")
+            k = dict_key_at(v, i)
+            write_string(sb, k)
+            sb.append(":")
+            write_value(sb, v[k])
+        sb.append("}}")
+        return
+    sb.append("null")
+
+func write_string(sb: StringBuilder, s: str):
+    sb.append("\"")
+    for i in range(len(s)):
+        c = s[i]
+        code = ord(c)
+        if c == "\"":
+            sb.append("\\\"")
+        elif c == "\\":
+            sb.append("\\\\")
+        elif c == "\n":
+            sb.append("\\n")
+        elif c == "\r":
+            sb.append("\\r")
+        elif c == "\t":
+            sb.append("\\t")
+        elif code == 8:
+            sb.append("\\b")
+        elif code == 12:
+            sb.append("\\f")
+        elif code < 32:
+            sb.append("\\u{hex4(code)}")
+        else:
+            sb.append(c)
+    sb.append("\"")
+
+func hex4(n: int) -> str:
+    digits = "0123456789abcdef"
+    a = int(n / 4096) % 16
+    b = int(n / 256) % 16
+    c = int(n / 16) % 16
+    d = n % 16
+    return digits[a] + digits[b] + digits[c] + digits[d]
+
+# Pretty-print with 2-space indent (useful for logs and debug output).
+func stringify_pretty(v: any, indent: int = 0) -> str:
+    pad = ""
+    for i in range(indent):
+        pad += "  "
+    pad2 = ""
+    for i in range(indent + 1):
+        pad2 += "  "
+    if v is none:
+        return "null"
+    t = type_of(v)
+    if t == "list":
+        n = len(v)
+        if n == 0:
+            return "[]"
+        out = "[\n"
+        for i in range(n):
+            if i > 0:
+                out += ",\n"
+            out += pad2 + stringify_pretty(v[i], indent + 1)
+        out += "\n" + pad + "]"
+        return out
+    if t == "dict":
+        n = len(v)
+        if n == 0:
+            return "{{}}"
+        out = "{{\n"
+        for i in range(n):
+            k = dict_key_at(v, i)
+            if i > 0:
+                out += ",\n"
+            out += pad2 + stringify(k) + ": " + stringify_pretty(v[k], indent + 1)
+        out += "\n" + pad + "}}"
+        return out
+    return stringify(v)

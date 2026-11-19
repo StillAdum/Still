@@ -1,0 +1,14 @@
+# The net module: real HTTPS through WinHTTP (Windows). On other platforms
+# available() is false and the demo skips gracefully.
+use net
+
+if not net.available():
+    print("net backend unavailable on this platform (needs Windows WinHTTP); skipping")
+else:
+    r = net.get("https://api.github.com/repos/StillAdum/Still", "User-Agent: still-demo", 15000)
+    if r.ok:
+        print("status: {r.status}")
+        print("content-type: {r.content_type}")
+        print("body bytes: {len(r.body)}")
+    else:
+        print("request failed: {r.error}")

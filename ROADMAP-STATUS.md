@@ -1,3 +1,13 @@
+> **v0.6.0 update:** net/gui/audio/media moved from "typechecked-only stubs"
+> to real Windows backends (WinHTTP / GDI / winmm / GDI+, all loaded at run
+> time — zero new link-time dependencies), the game-lobby stub inside `net`
+> was replaced by a real HTTP(S) client (legacy Packet/Lobby helpers kept for
+> compatibility), and a pure-Still `json` module plus a `dict_key_at` builtin
+> shipped. A latent double-release on boxed-return temps was fixed in the
+> emitter (found by the new JSON round-trip tests). Phase 4/8/10 statuses
+> below now have a shipped slice on Windows; cross-platform backends remain
+> open. Conformance updated to 60 programs (json round-trip included).
+
 # ROADMAP-STATUS — v0.4.0 (+ v0.4.2 struct-mutation, v0.4.3 generic-types updates)
 
 Status of Still against `roadmap.md` ("Custom Programming Language: Implementation Roadmap", 13 phases + 2 addenda), written per that document's own rule #6 ("report status against them honestly, including what was skipped or stubbed") and rule #10. Dates: v0.4.0, November 2026 (v0.4.2 & v0.4.3 updates, November 2026). Nothing here is aspirational — every ✅ has a test or a runnable demo behind it in the repo.

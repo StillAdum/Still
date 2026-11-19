@@ -523,3 +523,66 @@ void still_tostr_add_a(still_sb* sb, still_any* a);
 // String append that reuses the buffer when the target has refcount 1,
 // so `s += t` in a loop stays linear instead of quadratic.
 void still_str_append_inplace(still_str** slot, still_str* add);
+
+/* ---------------------------------------------------------------- Universal platform modules (v0.6.0) */
+/* net: HTTPS/HTTP client (WinHTTP backend on Windows; graceful no-op elsewhere).
+   Call net_request to perform a request, read status/header/body from the
+   slot, then call net_free when done. */
+int64_t still_net_available(void);
+const char* still_net_last_error(void);
+int64_t still_net_request(const char* method, const char* url, const char* headers,
+                          const char* body, int64_t timeout_ms);
+int64_t still_net_status(int64_t id);
+const char* still_net_header(int64_t id, const char* name);
+const char* still_net_body(int64_t id);
+void still_net_free(int64_t id);
+
+/* gui: Win32 window + GDI immediate-mode rendering (Windows; no-op elsewhere).
+   open_window returns a window handle (nonzero) or 0. A frame is
+   begin_frame -> draw -> end_frame; mouse/keyboard/text input are polled. */
+int64_t still_gui_available(void);
+int64_t still_gui_open_window(const char* title, int64_t w, int64_t h);
+int64_t still_gui_window_open(int64_t handle);
+void still_gui_close_window(int64_t handle);
+void still_gui_set_title(int64_t handle, const char* title);
+void still_gui_set_bg(int64_t handle, int64_t rgb);
+int64_t still_gui_begin_frame(int64_t handle);
+void still_gui_end_frame(int64_t handle);
+int64_t still_gui_width(int64_t handle);
+int64_t still_gui_height(int64_t handle);
+int64_t still_gui_mouse_x(int64_t handle);
+int64_t still_gui_mouse_y(int64_t handle);
+int64_t still_gui_mouse_down(int64_t handle);
+int64_t still_gui_mouse_clicked(int64_t handle);
+int64_t still_gui_wheel_delta(int64_t handle);
+const char* still_gui_text_input(int64_t handle);
+int64_t still_gui_key(int64_t handle, int64_t vk);
+int64_t still_gui_key_pressed(int64_t handle, int64_t vk);
+void still_gui_text(int64_t handle, double x, double y, const char* text, int64_t rgb, double size);
+void still_gui_text_bold(int64_t handle, double x, double y, const char* text, int64_t rgb, double size);
+int64_t still_gui_text_width(int64_t handle, const char* text, double size);
+void still_gui_fill_rect(int64_t handle, double x, double y, double w, double h, int64_t rgb);
+void still_gui_fill_round(int64_t handle, double x, double y, double w, double h, double rad, int64_t rgb);
+void still_gui_fill_circle(int64_t handle, double cx, double cy, double rad, int64_t rgb);
+void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, double width, int64_t rgb);
+void still_gui_clip_push(int64_t handle, double x, double y, double w, double h);
+void still_gui_clip_pop(int64_t handle);
+void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, double w, double h);
+
+/* audio: WAV playback + melody synthesis via winmm (Windows; no-op elsewhere) */
+int64_t still_audio_available(void);
+void still_audio_stop(void);
+int64_t still_audio_play_file(const char* path, int64_t loop);
+int64_t still_audio_play_melody(const char* spec, int64_t loop);
+
+/* media: image loading via GDI+ (Windows; no-op elsewhere). Handles are
+   opaque ints; pass them to gui draw_image to render. */
+int64_t still_media_available(void);
+int64_t still_media_load(const char* path);
+void still_media_free(int64_t img);
+int64_t still_media_width(int64_t img);
+int64_t still_media_height(int64_t img);
+
+/* Universal any-dict helper: i-th key of a string-keyed dict held in `any`
+   ("" when out of range or not a string-keyed dict). Pairs with len(). */
+still_str* still_dict_key_at(still_any* a, int64_t i);

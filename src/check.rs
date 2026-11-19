@@ -9,7 +9,7 @@ pub struct ModSrc {
 }
 
 pub const BUILTINS: &[&str] = &[
-    "print", "len", "push", "pop", "keys", "pairs", "str", "int", "float", "bool", "abs", "min", "max", "sum",
+    "print", "len", "push", "pop", "keys", "pairs", "str", "int", "float", "bool", "abs", "min", "max", "sum", "dict_key_at",
     "range", "enumerate", "reversed", "type_of", "input", "clock", "rand", "seed", "check", "fail", "exit",
     "ord", "chr", "read_file", "write_file", "get_env", "sleep_ms", "args",
 ];
@@ -2694,6 +2694,17 @@ impl Checker {
                     self.diags.push(err(sp, "keys takes a dict: keys(ages)".into()));
                     BR::Yes(None)
                 }
+            }
+            "dict_key_at" => {
+                need!(2, "dict_key_at");
+                match resolve(&args[0].ty) {
+                    Ty::Dict(..) | Ty::Any => {}
+                    other => {
+                        self.diags.push(err(sp, format!("dict_key_at works on dict and any values, not {}", ty_name(&other))));
+                        return BR::Yes(None);
+                    }
+                }
+                BR::Yes(Some(Tx { ty: Ty::Str, span: sp.clone(), x: X::Builtin(Bi::DictKeyAt, args) }))
             }
             "pairs" => {
                 need!(1, "pairs");

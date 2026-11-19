@@ -265,3 +265,26 @@ cargo test --release
 6. Conformance growth toward 500 (62 today).
 7. LSP follow-ups: cross-module completion and references (single-file references/rename shipped in v0.4.0).
 8. String-fold follow-up: add a string-building bench to the CI gate so `+=` folding has a regression number (fold evidence is documented in RELEASE_NOTES for v0.4.0).
+
+## v0.6.0 — universal platform libraries (2026-11)
+
+- net: real HTTP(S) client over WinHTTP (dlopen pattern, zero link deps);
+  Response value type; url_encode/url_decode/parse_qs. Legacy Packet/Lobby
+  kept at the bottom of net.strc for compatibility.
+- gui: Win32 window + GDI immediate-mode backend (double-buffered DIB,
+  poll-based pump, VK constants, clip regions, bold/regular Segoe UI cache).
+- audio: winmm PlaySoundA wrapper + in-memory melody synth (16-bit 22050 Hz
+  WAV, 8 ms fades, rests).
+- media: GDI+ image load/free/width/height + gui.draw_image (bicubic).
+- json: pure-Still RFC 8259 parser (surrogate pairs, byte-offset errors,
+  JsonResult), stringify/stringify_pretty, panic-free accessors.
+- language: new builtin dict_key_at(v, i) + still_dict_key_at runtime helper
+  for iterating any-dict keys; extern "C" cannot take `any` params, so the
+  builtin was the clean path.
+- emitter fix: adapt_ret boxed-return hand-off now unregisters the consumed
+  temp before the scope-end sweep — fixes a latent double-free on every
+  function returning a dict/list/str temp as `any`. Found by the JSON
+  round-trip tests (dict values came back empty/garbled under allocation
+  pressure). Conformance green after the fix.
+- examples: json_tour (portable), net_demo, audio_demo (graceful skip),
+  gui_demo, media_demo (STILL_RUN_GUI_DEMO guard keeps CI headless-safe).

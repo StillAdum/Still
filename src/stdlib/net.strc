@@ -1,3 +1,131 @@
+# net — HTTP/HTTPS client (real since v0.6.0) + legacy game-net helpers
+#
+# The network backend is real: requests run through WinHTTP on Windows with
+# TLS, timeouts, redirect following and automatic gzip/deflate decompression.
+# On other platforms the module degrades gracefully (available() is false and
+# request() returns an error Response) — the API itself is universal, so when
+# Still grows POSIX/OpenSSL backends the same calls work unchanged.
+#
+# Headers are a single str with one "Name: value" per line, separated by \n.
+
+extern "C":
+    func still_net_available() -> int
+    func still_net_last_error() -> str
+    func still_net_request(method: str, url: str, headers: str, body: str, timeout_ms: int) -> int
+    func still_net_status(id: int) -> int
+    func still_net_header(id: int, name: str) -> str
+    func still_net_body(id: int) -> str
+    func still_net_free(id: int)
+
+# An HTTP response. ok is true only when a complete response arrived;
+# status is the HTTP code (0 on transport failure).
+type Response:
+    ok: bool
+    status: int
+    body: str
+    error: str
+    content_type: str
+
+func available() -> bool:
+    return still_net_available() == 1
+
+func last_error() -> str:
+    return still_net_last_error()
+
+func request(method: str, url: str, headers: str = "", body: str = "", timeout_ms: int = 20000) -> Response:
+    rid = still_net_request(method, url, headers, body, timeout_ms)
+    if rid < 0:
+        return Response(false, 0, "", still_net_last_error(), "")
+    st = still_net_status(rid)
+    body_out = still_net_body(rid)
+    ctype = still_net_header(rid, "Content-Type")
+    still_net_free(rid)
+    if st == 0:
+        return Response(false, 0, "", still_net_last_error(), "")
+    return Response(true, st, body_out, "", ctype)
+
+func get(url: str, headers: str = "", timeout_ms: int = 20000) -> Response:
+    return request("GET", url, headers, "", timeout_ms)
+
+func post(url: str, body: str, headers: str = "Content-Type: application/x-www-form-urlencoded", timeout_ms: int = 20000) -> Response:
+    return request("POST", url, headers, body, timeout_ms)
+
+func post_json(url: str, body: str, timeout_ms: int = 20000) -> Response:
+    return request("POST", url, "Content-Type: application/json", body, timeout_ms)
+
+func hex_byte(n: int) -> str:
+    digits = "0123456789ABCDEF"
+    a = int(n / 16) % 16
+    b = n % 16
+    return digits[a] + digits[b]
+
+func url_encode(s: str) -> str:
+    # percent-encode every byte that is not an unreserved ASCII character
+    safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+    out = ""
+    for i in range(len(s)):
+        c = s[i]
+        code = ord(c)
+        if code < 128 and safe.contains(c):
+            out += c
+        else:
+            out += "%" + hex_byte(code)
+    return out
+
+func hex_val(c: str) -> int:
+    digits = "0123456789abcdef"
+    for i in range(16):
+        if c == digits[i]:
+            return i
+    caps = "ABCDEF"
+    for i in range(6):
+        if c == caps[i]:
+            return 10 + i
+    return -1
+
+func url_decode(s: str) -> str:
+    out = ""
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "%" and i + 3 <= len(s):
+            hi = hex_val(s[i + 1])
+            lo = hex_val(s[i + 2])
+            if hi >= 0 and lo >= 0:
+                out += chr(hi * 16 + lo)
+                i = i + 3
+                continue
+        if c == "+":
+            out += " "
+        else:
+            out += c
+        i = i + 1
+    return out
+
+func parse_qs(qs: str) -> {str: str}:
+    # parse "a=1&b=2" into a dict (values are url-decoded)
+    out = {}
+    if qs == "":
+        return out
+    parts = qs.split("&")
+    for p in parts:
+        if p == "":
+            continue
+        eq = -1
+        for i in range(len(p)):
+            if p[i] == "=":
+                eq = i
+                break
+        if eq >= 0:
+            out[url_decode(p[0:eq])] = url_decode(p[eq + 1:])
+        else:
+            out[url_decode(p)] = ""
+    return out
+
+# ---------------------------------------------------------------------------
+# Legacy game-network helpers (kept for compatibility; used by netcode mods).
+# The real transport above is what applications should use.
+
 type Packet:
     seq: int
     ack: int

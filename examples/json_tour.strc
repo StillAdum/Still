@@ -1,0 +1,27 @@
+# The json module: strict RFC 8259 parsing + serialization, pure Still.
+use json
+
+r = json.parse("{{\"user\": \"ada\", \"followers\": 1200, \"verified\": true, \"tags\": [\"math\", \"computers\"], \"bio\": null}}")
+if r.ok:
+    print("parsed ok")
+    v = r.value
+    print("user: {json.get_str(v, "user", "?")}")
+    print("followers: {json.get_int(v, "followers", 0)}")
+    print("verified: {json.get_bool(v, "verified", false)}")
+    tags = json.get_list(v, "tags")
+    for i in range(len(tags)):
+        print("- {tags[i]}")
+    print("bio is none: {json.get_any(v, "bio") is none}")
+    # safe access never panics on missing keys
+    print("website: {json.get_str(v, "website", "(none)")}")
+    # build JSON from a dict of values
+    out: {str: any} = {}
+    out["status"] = "ok"
+    out["count"] = len(tags)
+    print(json.stringify(out))
+else:
+    print("error: {r.error}")
+
+# errors report the byte offset
+bad = json.parse("{{\"a\": tru}}")
+print(bad.ok, bad.error)

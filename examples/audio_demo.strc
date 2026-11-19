@@ -1,0 +1,13 @@
+# The audio module: melody synthesis + WAV playback via winmm (Windows).
+use audio
+
+if not audio.available():
+    print("audio backend unavailable on this platform (needs Windows winmm); skipping")
+else:
+    # a tiny C-major arpeggio: freq:ms pairs, 0 is a rest
+    spec = "261:250,329:250,392:250,523:500"
+    print("playing melody: {spec}")
+    audio.play_melody(spec)
+    sleep_ms(1400)
+    audio.stop()
+    print("done")

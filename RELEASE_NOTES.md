@@ -1,3 +1,68 @@
+# Still v0.6.0 — universal platform libraries (net / gui / audio / media / json)
+
+**Still** is a compiled language that reads like Python and runs like C.
+v0.6.0 turns four typechecked-only stdlib stubs into real, working libraries
+and adds a pure-Still JSON module — all universal, none app-specific. The
+backends are Windows-first (per Addendum A) and every function degrades
+gracefully on other platforms (`available()` returns false), so the same
+program typechecks and runs everywhere.
+
+## What's new in v0.6.0
+
+- **`net` — real HTTP/HTTPS client.** `net.get(url)` / `net.post(url, body)`
+  / `net.request(method, url, headers, body, timeout_ms)` run through WinHTTP
+  with TLS, timeouts, redirect following and automatic gzip/deflate
+  decompression. Headers are one `"Name: value"` per line. Responses come
+  back as a `Response` value (`ok`, `status`, `body`, `error`,
+  `content_type`). Also: `url_encode`, `url_decode`, `parse_qs`. Zero new
+  link-time dependencies — winhttp.dll is resolved at run time (the same
+  dlopen pattern the `py` bridge uses).
+- **`gui` — real windowing + immediate-mode rendering.** `gui.open_window`
+  opens a Win32 window (GDI double-buffered backbuffer). Frames are
+  `begin_frame` -> draw -> `end_frame`. Primitives: `fill_rect`,
+  `fill_round`, `fill_circle`, `stroke_circle`, `text`, `text_bold`,
+  `text_width`, `draw_image` (with the media module), `clip_push` /
+  `clip_pop` for scroll regions. Input: mouse position/click, wheel,
+  per-key `key` / `key_pressed` (VK_* constants defined), `text_input` for
+  typing. DefWindowProc handles the rest; no message-thread juggling.
+- **`audio` — WAV playback + melody synthesis.** `audio.play_file(path)`
+  plays WAV files; `audio.play_melody("440:500,0:100,660:500")` synthesizes
+  a 16-bit 22050 Hz WAV in memory (per-note 8 ms fades, rests with `0:`) and
+  plays it via winmm. Playback is async and single-channel;
+  `audio.stop()` silences.
+- **`media` — image loading via GDI+.** `media.load(path)` opens
+  JPEG/PNG/GIF/BMP/ICO/TIFF and returns an opaque handle; `media.width`,
+  `media.height`, `media.free`; render with `gui.draw_image` (high-quality
+  bicubic). gdiplus.dll is resolved at run time.
+- **`json` — new module, pure Still.** Strict RFC 8259 parser producing
+  `any` values (dicts/lists/str/int/float/bool/none) with byte-offset error
+  reporting, full `\uXXXX` escape support including surrogate pairs,
+  `stringify` / `stringify_pretty`, and panic-free accessors (`get_str`,
+  `get_int`, `get_float`, `get_bool`, `get_list`, `get_dict`, `get_at`)
+  built on the panic-free `key in dict` membership test.
+- **New builtin: `dict_key_at(v, i)`** — the i-th key of a string-keyed dict
+  held in an `any`, pairing with `len(v)` to iterate `any`-dict keys without
+  panicking. Backed by `still_dict_key_at` in the C runtime.
+- **Memory-safety fix in the emitter.** `adapt_ret`'s boxed-return hand-off
+  (returning a dict/list/str temp as `any`) released the temp but never
+  unregistered it, so the scope-end temp sweep released it a second time — a
+  latent double-free on every such return path. The temp is now unregistered
+  at the hand-off. Found by the new JSON round-trip tests; conformance stays
+  green.
+- **Examples:** `json_tour` (runs everywhere), `net_demo`, `audio_demo`
+  (graceful skip without the backend), `gui_demo`, `media_demo` (guarded by
+  `STILL_RUN_GUI_DEMO=1` so CI stays headless-safe).
+
+## Platform notes (honest scope)
+
+- Windows gets real backends (WinHTTP/GDI/winmm/GDI+), matching the
+  Windows-x64-first addendum. On Linux/macOS the modules typecheck and run;
+  `available()` returns false and calls return neutral errors instead of
+  crashing — a POSIX/OpenSSL backend is the natural follow-up.
+- `gui` is a backend, not a widget toolkit: layout/widgets are the
+  application's job (see the gui_demo for the immediate-mode pattern).
+- Audio playback is single-channel (a new `play_*` stops the previous one).
+
 # Still v0.4.1 — Windows setup
 
 **Still** is a compiled language that reads like Python and runs like C.

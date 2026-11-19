@@ -2086,12 +2086,15 @@ impl Emitter {
             (_, Ty::Any) if !matches!(f, Ty::Any) => {
                 // `expr` is exclusively owned here (a consumed temp), so for
                 // ref'd types the box takes a fresh ref and the old one is
-                // handed off via release.
+                // handed off via release. The hand-off release consumes the
+                // temp, so it must be unregistered — otherwise the scope-end
+                // drop_temps_to would release it a second time (double-free).
                 let bt = self.newtmp();
                 let be = self.box_into_any(expr, &f);
                 self.line(format!("still_any* {} = {};", bt, be));
                 if matches!(f, Ty::Str | Ty::List(_) | Ty::Dict(..)) {
                     self.line(format!("still_release({});", expr));
+                    self.unreg_temp(&expr);
                 }
                 bt
             }
@@ -3566,6 +3569,14 @@ impl Emitter {
                 } else {
                     format!("{}->len", e)
                 }
+            }
+            Bi::DictKeyAt => {
+                let v = self.emit_expr(&args[0]);
+                let i = self.emit_expr(&args[1]);
+                let t = self.newtmp();
+                self.line(format!("still_str* {} = still_dict_key_at({}, {});", t, v, i));
+                self.reg_temp(&t, Ty::Str);
+                t
             }
             Bi::Push => {
                 let l = self.emit_expr(&args[0]);

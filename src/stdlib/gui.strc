@@ -1,4 +1,191 @@
+# gui module uses vec for its legacy retained-mode kit below
 use vec
+#
+# Windows backend: a Win32 window rendered with GDI into a double-buffered
+# backbuffer. Other platforms currently degrade gracefully (available() is
+# false, open_window returns 0). The API is platform-universal.
+#
+# A frame is: open_window once, then each tick:
+#     if begin_frame(win):
+#         ... draw with fill_rect / fill_round / fill_circle / text / draw_image
+#         ... poll mouse / keys / text_input
+#         end_frame(win)
+#
+# Colors are 0xRRGGBB ints (e.g. 0xFF3366). Coordinates are client-area pixels.
+# Keyboard uses virtual-key codes (VK_*); common ones are defined below.
+
+extern "C":
+    func still_gui_available() -> int
+    func still_gui_open_window(title: str, w: int, h: int) -> int
+    func still_gui_window_open(win: int) -> int
+    func still_gui_close_window(win: int)
+    func still_gui_set_title(win: int, title: str)
+    func still_gui_set_bg(win: int, rgb: int)
+    func still_gui_begin_frame(win: int) -> int
+    func still_gui_end_frame(win: int)
+    func still_gui_width(win: int) -> int
+    func still_gui_height(win: int) -> int
+    func still_gui_mouse_x(win: int) -> int
+    func still_gui_mouse_y(win: int) -> int
+    func still_gui_mouse_down(win: int) -> int
+    func still_gui_mouse_clicked(win: int) -> int
+    func still_gui_wheel_delta(win: int) -> int
+    func still_gui_text_input(win: int) -> str
+    func still_gui_key(win: int, vk: int) -> int
+    func still_gui_key_pressed(win: int, vk: int) -> int
+    func still_gui_text(win: int, x: float, y: float, text: str, rgb: int, size: float)
+    func still_gui_text_bold(win: int, x: float, y: float, text: str, rgb: int, size: float)
+    func still_gui_text_width(win: int, text: str, size: float) -> int
+    func still_gui_fill_rect(win: int, x: float, y: float, w: float, h: float, rgb: int)
+    func still_gui_fill_round(win: int, x: float, y: float, w: float, h: float, rad: float, rgb: int)
+    func still_gui_fill_circle(win: int, cx: float, cy: float, rad: float, rgb: int)
+    func still_gui_stroke_circle(win: int, cx: float, cy: float, rad: float, width: float, rgb: int)
+    func still_gui_clip_push(win: int, x: float, y: float, w: float, h: float)
+    func still_gui_clip_pop(win: int)
+    func still_gui_draw_image(win: int, img: int, x: float, y: float, w: float, h: float)
+
+func available() -> bool:
+    return still_gui_available() == 1
+
+func open_window(title: str, w: int, h: int) -> int:
+    return still_gui_open_window(title, w, h)
+
+func window_open(win: int) -> bool:
+    return still_gui_window_open(win) == 1
+
+func close_window(win: int):
+    still_gui_close_window(win)
+
+func set_title(win: int, title: str):
+    still_gui_set_title(win, title)
+
+func set_bg(win: int, rgb: int):
+    still_gui_set_bg(win, rgb)
+
+func begin_frame(win: int) -> bool:
+    return still_gui_begin_frame(win) == 1
+
+func end_frame(win: int):
+    still_gui_end_frame(win)
+
+func width(win: int) -> int:
+    return still_gui_width(win)
+
+func height(win: int) -> int:
+    return still_gui_height(win)
+
+func mouse_x(win: int) -> int:
+    return still_gui_mouse_x(win)
+
+func mouse_y(win: int) -> int:
+    return still_gui_mouse_y(win)
+
+func mouse_down(win: int) -> bool:
+    return still_gui_mouse_down(win) == 1
+
+func mouse_clicked(win: int) -> bool:
+    return still_gui_mouse_clicked(win) == 1
+
+func wheel_delta(win: int) -> int:
+    return still_gui_wheel_delta(win)
+
+func text_input(win: int) -> str:
+    return still_gui_text_input(win)
+
+func key(win: int, vk: int) -> bool:
+    return still_gui_key(win, vk) == 1
+
+func key_pressed(win: int, vk: int) -> bool:
+    return still_gui_key_pressed(win, vk) == 1
+
+func text(win: int, x: float, y: float, text: str, rgb: int, size: float):
+    still_gui_text(win, x, y, text, rgb, size)
+
+func text_bold(win: int, x: float, y: float, text: str, rgb: int, size: float):
+    still_gui_text_bold(win, x, y, text, rgb, size)
+
+func text_width(win: int, text: str, size: float) -> int:
+    return still_gui_text_width(win, text, size)
+
+func fill_rect(win: int, x: float, y: float, w: float, h: float, rgb: int):
+    still_gui_fill_rect(win, x, y, w, h, rgb)
+
+func fill_round(win: int, x: float, y: float, w: float, h: float, rad: float, rgb: int):
+    still_gui_fill_round(win, x, y, w, h, rad, rgb)
+
+func fill_circle(win: int, cx: float, cy: float, rad: float, rgb: int):
+    still_gui_fill_circle(win, cx, cy, rad, rgb)
+
+func stroke_circle(win: int, cx: float, cy: float, rad: float, width: float, rgb: int):
+    still_gui_stroke_circle(win, cx, cy, rad, width, rgb)
+
+func clip_push(win: int, x: float, y: float, w: float, h: float):
+    still_gui_clip_push(win, x, y, w, h)
+
+func clip_pop(win: int):
+    still_gui_clip_pop(win)
+
+func draw_image(win: int, img: int, x: float, y: float, w: float, h: float):
+    still_gui_draw_image(win, img, x, y, w, h)
+
+# Virtual-key codes for key() / key_pressed()
+VK_BACK = 8
+VK_TAB = 9
+VK_RETURN = 13
+VK_SHIFT = 16
+VK_CONTROL = 17
+VK_ESCAPE = 27
+VK_SPACE = 32
+VK_PRIOR = 33      # page up
+VK_NEXT = 34       # page down
+VK_END = 35
+VK_HOME = 36
+VK_LEFT = 37
+VK_UP = 38
+VK_RIGHT = 39
+VK_DOWN = 40
+VK_DELETE = 46
+VK_A = 65
+VK_B = 66
+VK_C = 67
+VK_D = 68
+VK_E = 69
+VK_F = 70
+VK_G = 71
+VK_H = 72
+VK_I = 73
+VK_J = 74
+VK_K = 75
+VK_L = 76
+VK_M = 77
+VK_N = 78
+VK_O = 79
+VK_P = 80
+VK_Q = 81
+VK_R = 82
+VK_S = 83
+VK_T = 84
+VK_U = 85
+VK_V = 86
+VK_W = 87
+VK_X = 88
+VK_Y = 89
+VK_Z = 90
+VK_0 = 48
+VK_1 = 49
+VK_2 = 50
+VK_3 = 51
+VK_4 = 52
+VK_5 = 53
+VK_6 = 54
+VK_7 = 55
+VK_8 = 56
+VK_9 = 57
+
+# ---------------------------------------------------------------------------
+# Legacy retained-mode kit (kept for compatibility with v0.5 programs).
+# It accumulates DrawCmd values; pair it with the real functions above to
+# render them, or keep using it headless in tests.
 
 type DrawCmd:
     kind: str
@@ -7,7 +194,7 @@ type DrawCmd:
     w: float
     h: float
     text: str
-    color: Color
+    color: int
 
 type UI:
     cursor_x: float = 10.0
@@ -32,8 +219,7 @@ type UI:
         return self.commands
 
     func label(self, text: str):
-        col = Color(1.0, 1.0, 1.0, 1.0)
-        cmd = DrawCmd("text", self.cursor_x, self.cursor_y, 0.0, 20.0, text, col)
+        cmd = DrawCmd("text", self.cursor_x, self.cursor_y, 0.0, 20.0, text, 0xFFFFFF)
         push(self.commands, cmd)
         self.cursor_y = self.cursor_y + 24.0
 
@@ -42,15 +228,15 @@ type UI:
         by = self.cursor_y
         hover = (self.mouse_x >= bx and self.mouse_x <= bx + w and self.mouse_y >= by and self.mouse_y <= by + h)
         clicked = false
-        col = Color(0.2, 0.2, 0.25, 1.0)
+        col = 0x333340
         if hover:
-            col = Color(0.3, 0.3, 0.4, 1.0)
+            col = 0x4D4D66
             if self.mouse_down:
-                col = Color(0.4, 0.4, 0.6, 1.0)
+                col = 0x666699
                 clicked = true
         bg = DrawCmd("rect", bx, by, w, h, "", col)
         push(self.commands, bg)
-        txt = DrawCmd("text", bx + 8.0, by + 6.0, w, h, text, Color(1.0, 1.0, 1.0, 1.0))
+        txt = DrawCmd("text", bx + 8.0, by + 6.0, w, h, text, 0xFFFFFF)
         push(self.commands, txt)
         self.cursor_y = self.cursor_y + h + self.spacing
         return clicked
@@ -64,9 +250,9 @@ type UI:
             ratio = 0.0
         if ratio > 1.0:
             ratio = 1.0
-        bg = DrawCmd("rect", bx, by, w, h, "", Color(0.15, 0.15, 0.18, 1.0))
+        bg = DrawCmd("rect", bx, by, w, h, "", 0x26262E)
         push(self.commands, bg)
-        fill = DrawCmd("rect", bx, by, w * ratio, h, "", Color(0.2, 0.5, 0.8, 1.0))
+        fill = DrawCmd("rect", bx, by, w * ratio, h, "", 0x3380CC)
         push(self.commands, fill)
         if self.mouse_x >= bx and self.mouse_x <= bx + w and self.mouse_y >= by and self.mouse_y <= by + h:
             if self.mouse_down:
@@ -79,24 +265,23 @@ type UI:
         bx = self.cursor_x
         by = self.cursor_y
         size = 18.0
-        bg_col = Color(0.2, 0.2, 0.25, 1.0)
         clicked = false
         if self.mouse_x >= bx and self.mouse_x <= bx + size and self.mouse_y >= by and self.mouse_y <= by + size:
             if self.mouse_down:
                 clicked = true
                 checked = not checked
-        bg = DrawCmd("rect", bx, by, size, size, "", bg_col)
+        bg = DrawCmd("rect", bx, by, size, size, "", 0x333340)
         push(self.commands, bg)
         if checked:
-            mark = DrawCmd("rect", bx + 4.0, by + 4.0, size - 8.0, size - 8.0, "", Color(0.1, 0.8, 0.3, 1.0))
+            mark = DrawCmd("rect", bx + 4.0, by + 4.0, size - 8.0, size - 8.0, "", 0x1ACC4D)
             push(self.commands, mark)
-        lbl = DrawCmd("text", bx + size + 8.0, by, 0.0, size, label, Color(1.0, 1.0, 1.0, 1.0))
+        lbl = DrawCmd("text", bx + size + 8.0, by, 0.0, size, label, 0xFFFFFF)
         push(self.commands, lbl)
         self.cursor_y = self.cursor_y + size + self.spacing
         return checked
 
     func separator(self, w: float = 200.0):
-        sep = DrawCmd("rect", self.cursor_x, self.cursor_y, w, 1.0, "", Color(0.3, 0.3, 0.35, 1.0))
+        sep = DrawCmd("rect", self.cursor_x, self.cursor_y, w, 1.0, "", 0x4D4D59)
         push(self.commands, sep)
         self.cursor_y = self.cursor_y + 8.0
 

@@ -1,3 +1,36 @@
+# media — image loading via GDI+ (real since v0.6.0) + legacy capture stubs
+#
+# load() opens JPEG/PNG/GIF/BMP/ICO/TIFF files from disk and returns an opaque
+# image handle (0 on failure). Pass the handle to gui.draw_image to render it
+# inside a gui window. free() releases the handle when done. On other
+# platforms available() is false and load() returns 0.
+
+extern "C":
+    func still_media_available() -> int
+    func still_media_load(path: str) -> int
+    func still_media_free(img: int)
+    func still_media_width(img: int) -> int
+    func still_media_height(img: int) -> int
+
+func available() -> bool:
+    return still_media_available() == 1
+
+func load(path: str) -> int:
+    return still_media_load(path)
+
+func free(img: int):
+    still_media_free(img)
+
+func width(img: int) -> int:
+    return still_media_width(img)
+
+func height(img: int) -> int:
+    return still_media_height(img)
+
+# ---------------------------------------------------------------------------
+# Legacy capture stubs (kept for compatibility; these need real backend work
+# and are not wired to the platform layer yet).
+
 type WasapiCapture:
     sample_rate: int = 48000
     channels: int = 2

@@ -471,6 +471,7 @@ pub enum Bi {
     GetEnv,
     SleepMs,
     Args,
+    DictKeyAt,
 }
 
 #[derive(Clone, Debug)]

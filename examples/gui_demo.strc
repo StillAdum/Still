@@ -1,0 +1,36 @@
+# The gui module: a real Win32/GDI window with immediate-mode drawing.
+# Windows only; set STILL_RUN_GUI_DEMO=1 to actually open the window
+# (CI and `cargo test` skip it so the example stays headless-safe).
+use gui
+use os
+
+if env("STILL_RUN_GUI_DEMO", "") == "":
+    print("gui demo guarded by STILL_RUN_GUI_DEMO=1 (window backend needs Windows)")
+else:
+    win = gui.open_window("Still GUI demo", 420, 260)
+    if win == 0:
+        print("could not open a window on this platform")
+    else:
+        gui.set_bg(win, 0x101418)
+        while gui.window_open(win):
+            if gui.begin_frame(win):
+                gui.fill_round(win, 20, 20, 380, 60, 12, 0x1F6FEB)
+                gui.text_bold(win, 36, 38, "Hello from Still", 0xFFFFFF, 24)
+                gui.fill_rect(win, 20, 100, 380, 1, 0x30363D)
+                gui.text(win, 20, 120, "left click the button, or press ESC", 0x8B949E, 14)
+                mx = gui.mouse_x(win)
+                my = gui.mouse_y(win)
+                col = 0x21262D
+                if mx >= 20 and mx <= 160 and my >= 150 and my <= 190:
+                    col = 0x1F6FEB
+                gui.fill_round(win, 20, 150, 140, 40, 8, col)
+                gui.text(win, 44, 162, "click me", 0xFFFFFF, 15)
+                if gui.mouse_clicked(win) and mx >= 20 and mx <= 160 and my >= 150 and my <= 190:
+                    gui.set_title(win, "clicked!")
+                if gui.key_pressed(win, gui.VK_ESCAPE):
+                    break
+                gui.end_frame(win)
+            else:
+                break
+        gui.close_window(win)
+        print("window closed cleanly")

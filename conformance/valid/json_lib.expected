@@ -1,0 +1,22 @@
+true true
+still
+42
+3.5
+true
+3 1 3
+yes
+true
+fallback
+{"n":42,"pi":3.5,"sub":{"deep":"yes"},"name":"still","xs":[1,2,3],"nil":null,"ok":true}
+false
+false
+a
+bA
+"a\nbA"
+150.0 -7 0.25
+{
+  "a": [
+    true,
+    false
+  ]
+}

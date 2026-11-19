@@ -14,7 +14,7 @@ use span::Diag;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub const VERSION: &str = "0.5.0";
+pub const VERSION: &str = "0.6.0";
 
 pub const STD_MATH: &str = include_str!("stdlib/math.strc");
 pub const STD_SORT: &str = include_str!("stdlib/sort.strc");
@@ -22,6 +22,7 @@ pub const STD_RANDOM: &str = include_str!("stdlib/random.strc");
 pub const STD_TIME: &str = include_str!("stdlib/time.strc");
 pub const STD_IO: &str = include_str!("stdlib/io.strc");
 pub const STD_OS: &str = include_str!("stdlib/os.strc");
+pub const STD_JSON: &str = include_str!("stdlib/json.strc");
 pub const STD_VEC: &str = include_str!("stdlib/vec.strc");
 pub const STD_GUI: &str = include_str!("stdlib/gui.strc");
 pub const STD_NET: &str = include_str!("stdlib/net.strc");
@@ -74,6 +75,7 @@ pub fn std_modules() -> Vec<(&'static str, &'static str)> {
         ("time", STD_TIME),
         ("io", STD_IO),
         ("os", STD_OS),
+        ("json", STD_JSON),
         ("vec", STD_VEC),
         ("gui", STD_GUI),
         ("net", STD_NET),
