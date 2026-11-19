@@ -1,14 +1,29 @@
 # The net module: real HTTPS through WinHTTP (Windows). On other platforms
 # available() is false and the demo skips gracefully.
-use net
+#
+# Runs a staged diagnostic (each stage prints and flushes) so a crash in the
+# C backend shows exactly which stage broke it.
+
+extern "C":
+    func fflush(f: int) -> int
+
+func stage(label: str):
+    print("stage:", label)
+    fflush(0)
 
 if not net.available():
     print("net backend unavailable on this platform (needs Windows WinHTTP); skipping")
+    fflush(0)
 else:
+    stage("available ok")
+    stage("request GET https://api.github.com/repos/StillAdum/Still")
     r = net.get("https://api.github.com/repos/StillAdum/Still", "User-Agent: still-demo", 15000)
+    stage("request returned")
     if r.ok:
         print("status: {r.status}")
         print("content-type: {r.content_type}")
         print("body bytes: {len(r.body)}")
     else:
         print("request failed: {r.error}")
+    fflush(0)
+    stage("done")
