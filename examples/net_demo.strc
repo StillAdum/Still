@@ -1,3 +1,4 @@
+use net
 # The net module: real HTTPS through WinHTTP (Windows). On other platforms
 # available() is false and the demo skips gracefully.
 #
