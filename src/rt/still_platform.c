@@ -119,6 +119,12 @@ static void net_init_slots(void) {
     g_net_slots_inited = 1;
 }
 
+static int g_net_trace = -1;
+static void net_trace(const char* stage) {
+    if (g_net_trace < 0) g_net_trace = (getenv("STILL_NET_TRACE") != NULL) ? 1 : 0;
+    if (g_net_trace) fprintf(stderr, "still_net: %s\n", stage);
+}
+
 static int net_load_winhttp(void) {
     if (g_net_winhttp) return 1;
     g_net_winhttp = LoadLibraryA("winhttp.dll");
@@ -152,7 +158,9 @@ static void net_slot_free(int id) {
 int64_t still_net_request(const char* method, const char* url, const char* headers,
                           const char* body, int64_t timeout_ms) {
     net_init_slots();
+    net_trace("request enter");
     if (!net_load_winhttp()) return -1;
+    net_trace("winhttp loaded");
 
     typedef void* (WINAPI *OpenFn)(const wchar_t*, DWORD, const wchar_t*, const wchar_t*, DWORD);
     typedef void* (WINAPI *ConnectFn)(void*, const wchar_t*, unsigned short, DWORD);
@@ -229,6 +237,7 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
         return -1;
     }
 
+    net_trace("opening session");
     void* hSession = wOpen(L"Still/0.6", STIL_WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     void* hConnect = NULL;
     void* hRequest = NULL;
@@ -237,11 +246,14 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
 
     do {
         if (!hSession) { net_set_err("WinHttpOpen failed"); break; }
+        net_trace("connecting");
         hConnect = wConnect(hSession, w_host, (unsigned short)port, 0);
         if (!hConnect) { snprintf(werr, sizeof(werr), "cannot connect to %s:%d", host, port); net_set_err(werr); break; }
+        net_trace("opening request");
         hRequest = wOpenReq(hConnect, w_method, w_path, NULL, NULL,
                             secure ? STIL_WINHTTP_FLAG_SECURE : 0);
         if (!hRequest) { net_set_err("WinHttpOpenRequest failed"); break; }
+        net_trace("setting options + headers");
 
         if (wSetOpt) {
             DWORD t = (DWORD)timeout_ms;
@@ -276,12 +288,15 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
             }
         }
 
+        net_trace("sending");
         size_t body_len = body ? strlen(body) : 0;
         BOOL sent = wSend(hRequest, NULL, 0,
                           (LPVOID)(body ? body : ""), (DWORD)body_len,
                           (DWORD)body_len, 0);
         if (!sent) { net_set_err("request send failed (offline, DNS, TLS or timeout)"); break; }
+        net_trace("sent; receiving response");
         if (!wRecv(hRequest, NULL, 0, 0)) { net_set_err("no response received"); break; }
+        net_trace("response received; reading status");
 
         for (int i = 0; i < STIL_NET_SLOTS; i++) {
             if (!g_net_slots[i].used) { slot_id = i; break; }
@@ -294,6 +309,7 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
                   NULL, &status, &sz, NULL);
         slot->status = (int64_t)status;
         slot->used = 1;
+        net_trace("status read; reading headers");
 
         /* content-type (queried per-header; avoids the raw-headers buffer) */
         char ctype[256] = "";
@@ -329,6 +345,7 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
         slot->body = acc;
         slot->body_len = total;
         g_net_err[0] = 0;
+        net_trace("body read complete");
     } while (0);
 
     if (hRequest) wClose(hRequest);
@@ -338,7 +355,8 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
     free(w_path);
     free(w_method);
 
-    if (slot_id < 0) return -1;
+    if (slot_id < 0) { net_trace("request failed"); return -1; }
+    net_trace("request ok");
     return slot_id;
 }
 
