@@ -181,22 +181,32 @@ impl Checker {
             let stmts = self.mods[m].clone();
             for s in &stmts {
                 if let Stmt::Use { target, alias, names, span } = s {
-                    if !self.mods.contains_key(target) {
+                    // path-form uses ("use \"dir/file.strc\"") are registered by
+                    // the loader under the file stem, so resolve to the stem too
+                    let mod_key = if target.ends_with(".strc") {
+                        std::path::Path::new(target)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| target.clone())
+                    } else {
+                        target.clone()
+                    };
+                    if !self.mods.contains_key(&mod_key) {
                         self.diags.push(err(span, format!("unknown module '{}'", target)));
                         continue;
                     }
-                    let alias = alias.clone().unwrap_or_else(|| target.clone());
-                    self.aliases.entry(m.clone()).or_default().insert(alias, target.clone());
+                    let alias = alias.clone().unwrap_or_else(|| mod_key.clone());
+                    self.aliases.entry(m.clone()).or_default().insert(alias, mod_key.clone());
                     if let Some(list) = names {
                         for n in list {
-                            let tmod = target.clone();
+                            let tmod = mod_key.clone();
                             if self.funcs.contains_key(&(tmod.clone(), n.clone()))
                                 || self.externs.contains_key(n)
-                                || self.gmap_contains(target, n)
+                                || self.gmap_contains(&mod_key, n)
                             {
                                 self.imports.entry(m.clone()).or_default().insert(n.clone(), (tmod, n.clone()));
-                            } else if self.short_types.get(target).map(|s| s.contains_key(n)).unwrap_or(false) {
-                                self.imports.entry(m.clone()).or_default().insert(n.clone(), (target.clone(), n.clone()));
+                            } else if self.short_types.get(&mod_key).map(|s| s.contains_key(n)).unwrap_or(false) {
+                                self.imports.entry(m.clone()).or_default().insert(n.clone(), (mod_key.clone(), n.clone()));
                             } else {
                                 self.diags.push(err(span, format!("module '{}' has no '{}'", target, n)));
                             }

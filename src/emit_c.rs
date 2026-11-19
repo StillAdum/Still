@@ -2178,6 +2178,16 @@ impl Emitter {
         self.line(format!("{} {} = {};", ct, t, read));
         let bt = resolve_deep(bty);
         if self.ty_has_refs(&bt) || matches!(bt, Ty::Tuple(_) | Ty::Named(_)) {
+            // place_read borrows the field/element without retaining, but the
+            // temp registered below is released at statement end — retain here
+            // so the release balances. Without this, every element store
+            // through a struct field (`obj.items[k] = v`) underflows the
+            // container's refcount and frees it mid-program.
+            let r = self.retain_expr(&bt);
+            if r != "_v" {
+                let rs = r.replace("_v", &t);
+                self.line(format!("{};", rs));
+            }
             self.reg_temp(&t, bt);
         }
         t

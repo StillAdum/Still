@@ -1,3 +1,28 @@
+# Still v0.6.2 — two refcount/resolution fixes found by a real app
+
+Wingram (a desktop client written entirely in Still) exercised paths the
+conformance suite had not, and turned up two emitter bugs plus one checker
+gap. All three are fixed here; the full conformance suite and every example
+stay green, and Wingram's headless selftest passes on the fixed compiler.
+
+- **Refcount underflow on element stores through struct fields.**
+  `obj.items[k] = v` materialized the container field into a temporary and
+  released it at statement end — without ever retaining it. Every such store
+  decremented the container's refcount, so a dict/list held in a struct field
+  was freed mid-program once enough stores ran (values came back as garbage
+  keys, then crashes). `materialize_place_read` now retains the borrowed read
+  so the statement-end release balances.
+- **Latent double-free on boxed returns** (the adapt_ret hand-off released
+  the consumed temp without unregistering it; the scope-end temp sweep
+  released it again). This shipped in v0.6.0's window and is included here in
+  the release notes for completeness — v0.6.0 and v0.6.1 already carry it.
+- **Checker: path-form `use` now resolves to the file stem.**
+  `use "dir/file.strc"` loads and registers under the stem `file`, but the
+  checker still looked the module up by the raw target string, so any
+  multi-directory project failed to typecheck with "unknown module". The
+  checker now resolves path-form targets to the stem (matching the loader),
+  with the same behavior for aliases and named imports.
+
 # Still v0.6.1 — filesystem builtins
 
 Two small universal additions on top of v0.6.0, driven by real applications
