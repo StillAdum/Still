@@ -1883,6 +1883,7 @@ void still_str_append_inplace(still_str** slot, still_str* add) {
 
 
 
+
 /* ---------------------------------------------------------------- Universal platform modules */
 /* net / gui / audio / media, added in Still v0.6.0.
 
@@ -1960,6 +1961,7 @@ static char* still_dup_cstr(const char* s) {
 #define STIL_WINHTTP_FLAG_SECURE 0x00800000
 #define STIL_WINHTTP_QUERY_STATUS_CODE 19
 #define STIL_WINHTTP_QUERY_RAW_HEADERS_CRLF 22
+#define STIL_WINHTTP_QUERY_CONTENT_TYPE 1
 #define STIL_WINHTTP_QUERY_FLAG_NUMBER 0x20000000
 #define STIL_WINHTTP_OPTION_CONNECT_TIMEOUT 3
 #define STIL_WINHTTP_OPTION_SEND_TIMEOUT 5
