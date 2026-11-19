@@ -9,7 +9,7 @@ pub struct ModSrc {
 }
 
 pub const BUILTINS: &[&str] = &[
-    "print", "len", "push", "pop", "keys", "pairs", "str", "int", "float", "bool", "abs", "min", "max", "sum", "dict_key_at",
+    "print", "len", "push", "pop", "keys", "pairs", "str", "int", "float", "bool", "abs", "min", "max", "sum", "dict_key_at", "read_dir", "file_exists",
     "range", "enumerate", "reversed", "type_of", "input", "clock", "rand", "seed", "check", "fail", "exit",
     "ord", "chr", "read_file", "write_file", "get_env", "sleep_ms", "args",
 ];
@@ -2705,6 +2705,26 @@ impl Checker {
                     }
                 }
                 BR::Yes(Some(Tx { ty: Ty::Str, span: sp.clone(), x: X::Builtin(Bi::DictKeyAt, args) }))
+            }
+            "read_dir" => {
+                need!(1, "read_dir");
+                match resolve(&args[0].ty) {
+                    Ty::Str => BR::Yes(Some(Tx { ty: Ty::List(Rc::new(Ty::Str)), span: sp.clone(), x: X::Builtin(Bi::ReadDir, args) })),
+                    other => {
+                        self.diags.push(err(sp, format!("read_dir takes a path str, not {}", ty_name(&other))));
+                        return BR::Yes(None);
+                    }
+                }
+            }
+            "file_exists" => {
+                need!(1, "file_exists");
+                match resolve(&args[0].ty) {
+                    Ty::Str => BR::Yes(Some(Tx { ty: Ty::Bool, span: sp.clone(), x: X::Builtin(Bi::FileExists, args) })),
+                    other => {
+                        self.diags.push(err(sp, format!("file_exists takes a path str, not {}", ty_name(&other))));
+                        return BR::Yes(None);
+                    }
+                }
             }
             "pairs" => {
                 need!(1, "pairs");

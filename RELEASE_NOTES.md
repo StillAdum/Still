@@ -1,3 +1,15 @@
+# Still v0.6.1 — filesystem builtins
+
+Two small universal additions on top of v0.6.0, driven by real applications
+(Wingram's mod loader needs both):
+
+- **`read_dir(path) -> [str]`** — lists names in a directory (skips `.` and
+  `..`). Returns an empty list when the folder cannot be opened, so a missing
+  folder reads as "nothing installed". Windows uses FindFirstFileA; POSIX
+  uses opendir/readdir.
+- **`file_exists(path) -> bool`** — an existence probe that does not panic on
+  missing files (GetFileAttributesA / stat).
+
 # Still v0.6.0 — universal platform libraries (net / gui / audio / media / json)
 
 **Still** is a compiled language that reads like Python and runs like C.

@@ -586,3 +586,8 @@ int64_t still_media_height(int64_t img);
 /* Universal any-dict helper: i-th key of a string-keyed dict held in `any`
    ("" when out of range or not a string-keyed dict). Pairs with len(). */
 still_str* still_dict_key_at(still_any* a, int64_t i);
+
+/* filesystem helpers (v0.6.1): directory listing (names only, empty list
+   when the folder cannot be opened) and an existence probe. */
+still_list_s* still_read_dir(still_str* path);
+int64_t still_file_exists(still_str* path);

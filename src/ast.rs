@@ -472,6 +472,8 @@ pub enum Bi {
     SleepMs,
     Args,
     DictKeyAt,
+    ReadDir,
+    FileExists,
 }
 
 #[derive(Clone, Debug)]

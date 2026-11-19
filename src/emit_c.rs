@@ -3578,6 +3578,18 @@ impl Emitter {
                 self.reg_temp(&t, Ty::Str);
                 t
             }
+            Bi::ReadDir => {
+                let p = self.emit_expr(&args[0]);
+                self.need_list(&Ty::Str);
+                let t = self.newtmp();
+                self.line(format!("still_list_s* {} = still_read_dir({});", t, p));
+                self.reg_temp(&t, Ty::List(Rc::new(Ty::Str)));
+                t
+            }
+            Bi::FileExists => {
+                let p = self.emit_expr(&args[0]);
+                format!("still_file_exists({})", p)
+            }
             Bi::Push => {
                 let l = self.emit_expr(&args[0]);
                 let v = self.emit_expr(&args[1]);

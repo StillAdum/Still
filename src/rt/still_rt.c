@@ -7,6 +7,8 @@
 #else
 #include <signal.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #endif
 
 /* captured by still_args_init from the generated main() */
@@ -1879,6 +1881,7 @@ void still_str_append_inplace(still_str** slot, still_str* add) {
 
 
 
+
 /* ---------------------------------------------------------------- Universal platform modules */
 /* net / gui / audio / media, added in Still v0.6.0.
 
@@ -3023,3 +3026,63 @@ int64_t still_media_width(int64_t img) { (void)img; return 0; }
 int64_t still_media_height(int64_t img) { (void)img; return 0; }
 
 #endif /* _WIN32 */
+
+/* ---------------------------------------------------------------- filesystem helpers (v0.6.1) */
+/* Directory listing and existence probe — universal, no platform backend
+   needed. read_dir returns file/subdirectory NAMES (not paths) sorted by the
+   OS order; it returns an empty list when the path cannot be opened, so
+   programs can treat a missing folder as "no mods installed". */
+
+still_list_s* still_read_dir(still_str* path) {
+    still_list_s* out = still_list_s_alloc(8);
+    char* p = (char*)malloc((size_t)path->len + 1);
+    if (!p) still_panic("memory", 0, "out of memory");
+    memcpy(p, path->bytes, (size_t)path->len);
+    p[path->len] = 0;
+#ifdef _WIN32
+    char pattern[1024];
+    snprintf(pattern, sizeof(pattern), "%s\\*", p);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            const char* name = fd.cFileName;
+            if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
+            still_str* s = still_str_new(name, (int64_t)strlen(name));
+            still_list_s_push(out, s);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR* d = opendir(p);
+    if (d) {
+        struct dirent* e;
+        while ((e = readdir(d)) != NULL) {
+            const char* name = e->d_name;
+            if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
+            still_str* s = still_str_new(name, (int64_t)strlen(name));
+            still_list_s_push(out, s);
+        }
+        closedir(d);
+    }
+#endif
+    free(p);
+    return out;
+}
+
+int64_t still_file_exists(still_str* path) {
+    char* p = (char*)malloc((size_t)path->len + 1);
+    if (!p) still_panic("memory", 0, "out of memory");
+    memcpy(p, path->bytes, (size_t)path->len);
+    p[path->len] = 0;
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(p);
+    free(p);
+    return (attrs != INVALID_FILE_ATTRIBUTES) ? 1 : 0;
+#else
+    struct stat st;
+    int r = stat(p, &st);
+    free(p);
+    return (r == 0) ? 1 : 0;
+#endif
+}
