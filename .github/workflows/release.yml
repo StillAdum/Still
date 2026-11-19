@@ -31,9 +31,10 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "$env:PATH;$pwd\target\release"
+          $env:STILL_NET_TRACE = "1"
           foreach ($f in Get-ChildItem examples\*.strc) {
             Write-Host "== $($f.Name)"
-            still run $f.FullName | Out-Null
+            still run $f.FullName 2>&1 | Select-Object -Last 4 | Out-Host
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
 

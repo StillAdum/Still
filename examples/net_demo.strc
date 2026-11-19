@@ -7,10 +7,6 @@
 use net
 use io
 
-extern "C":
-    func fflush(f: int) -> int
-    func putenv(s: str) -> int
-
 func stage(label: str):
     print("stage:", label)
     write_file("net_diag.log", label + "\n")
@@ -19,7 +15,6 @@ if not net.available():
     stage("unavailable - skipping (needs Windows WinHTTP)")
 else:
     stage("available ok")
-    putenv("STILL_NET_TRACE=1")
     stage("request GET api.github.com/repos/StillAdum/Still")
     r = net.get("https://api.github.com/repos/StillAdum/Still", "User-Agent: still-demo", 15000)
     stage("request returned ok={r.ok}")
