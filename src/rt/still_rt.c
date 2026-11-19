@@ -1882,6 +1882,7 @@ void still_str_append_inplace(still_str** slot, still_str* add) {
 
 
 
+
 /* ---------------------------------------------------------------- Universal platform modules */
 /* net / gui / audio / media, added in Still v0.6.0.
 
@@ -2177,18 +2178,18 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
         slot->status = (int64_t)status;
         slot->used = 1;
 
-        /* raw response headers */
-        DWORD hdr_size = 0;
-        wQueryHdr(hRequest, STIL_WINHTTP_QUERY_RAW_HEADERS_CRLF,
-                  NULL, NULL, &hdr_size, NULL);
-        if (hdr_size > 0) {
-            wchar_t* w_hdrs = (wchar_t*)malloc(hdr_size);
-            if (w_hdrs) {
-                if (wQueryHdr(hRequest, STIL_WINHTTP_QUERY_RAW_HEADERS_CRLF,
-                              NULL, (LPVOID)w_hdrs, &hdr_size, NULL)) {
-                    slot->raw_headers = still_narrow(w_hdrs);
-                }
-                free(w_hdrs);
+        /* content-type (queried per-header; avoids the raw-headers buffer) */
+        char ctype[256] = "";
+        DWORD ctype_size = sizeof(ctype);
+        wQueryHdr(hRequest, STIL_WINHTTP_QUERY_CONTENT_TYPE,
+                  NULL, (LPVOID)ctype, &ctype_size, NULL);
+        if (ctype[0] != 0) {
+            slot->raw_headers = still_dup_cstr("Content-Type: ");
+            size_t clen = strlen(ctype);
+            char* grown = (char*)realloc(slot->raw_headers, 15 + clen + 1);
+            if (grown) {
+                memcpy(grown + 14, ctype, clen + 1);
+                slot->raw_headers = grown;
             }
         }
 

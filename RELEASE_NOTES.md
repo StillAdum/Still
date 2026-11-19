@@ -1,3 +1,13 @@
+# Still v0.6.3 — net header hardening
+
+`still_net_header(id, name)` no longer reads the whole raw response-header
+block into a wide buffer and scans it. The backend now queries only what it
+needs per header (currently Content-Type, via WINHTTP_QUERY_CONTENT_TYPE)
+and synthesizes the stored line. This removes the flaky heap read that could
+crash a successful large response on Windows CI runners (a 200 with a big
+body occasionally crashed where a 403 never did — the raw-headers buffer was
+the difference between the paths). Requests and bodies are unchanged.
+
 # Still v0.6.2 — two refcount/resolution fixes found by a real app
 
 Wingram (a desktop client written entirely in Still) exercised paths the
