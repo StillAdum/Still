@@ -302,3 +302,6 @@ cargo test --release
 - per-monitor-v2 DPI, resizable/maximizable windows, gui.dpi/system_dpi
 - net.download_to binary file downloads
 - conformance 68/68
+
+## 2026-11-21 — v0.6.6
+- io.make_dir / still_dir_make

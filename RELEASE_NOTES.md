@@ -1,3 +1,9 @@
+# Still v0.6.6 — io.make_dir
+
+- **io.make_dir(path) / still_dir_make:** create directories for app-side
+  caches and exports ("cache/img" style). Small addition needed by Wingram
+  v0.2's on-disk image cache; conformance stays 68/68.
+
 # Still v0.6.5 — real web logins (WebView2), DPI-aware windows, no terminal flash
 
 All requested by Wingram v0.2: a PC Instagram client that has to actually

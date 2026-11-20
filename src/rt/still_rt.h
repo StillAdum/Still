@@ -608,3 +608,4 @@ still_str* still_dict_key_at(still_any* a, int64_t i);
    when the folder cannot be opened) and an existence probe. */
 still_list_s* still_read_dir(still_str* path);
 int64_t still_file_exists(still_str* path);
+int64_t still_dir_make(const char* path);

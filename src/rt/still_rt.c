@@ -3731,6 +3731,35 @@ still_list_s* still_read_dir(still_str* path) {
     return out;
 }
 
+/* Create a directory (parents created one level at a time, like mkdir -p on
+   the leaf only). Returns 1 when the directory exists afterwards. */
+int64_t still_dir_make(const char* path) {
+    if (!path) return 0;
+    size_t plen = strlen(path);
+    char* p = (char*)malloc(plen + 1);
+    if (!p) still_panic("memory", 0, "out of memory");
+    memcpy(p, path, plen + 1);
+    int ok = 0;
+    /* walk the path creating each level (works for "cache/img" style paths) */
+    for (char* q = p + 1; ; q++) {
+        if (*q == '/' || *q == '\\' || *q == 0) {
+            char saved = *q;
+            *q = 0;
+#ifdef _WIN32
+            if (strlen(p) > 0 && CreateDirectoryA(p, NULL)) ok = 1;
+            else if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES) ok = 1;
+#else
+            if (mkdir(p, 0755) == 0) ok = 1;
+            else if (access(p, F_OK) == 0) ok = 1;
+#endif
+            *q = saved;
+            if (*q == 0) break;
+        }
+    }
+    free(p);
+    return ok ? 1 : 0;
+}
+
 int64_t still_file_exists(still_str* path) {
     char* p = (char*)malloc((size_t)path->len + 1);
     if (!p) still_panic("memory", 0, "out of memory");

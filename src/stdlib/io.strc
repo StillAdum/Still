@@ -11,3 +11,12 @@ func write_lines(path: str, lines: [str]):
     if len(lines) > 0:
         out = out + "\n"
     write_file(path, out)
+
+# Create a directory (single call; intermediate levels are created too as
+# long as they are walked left to right, "cache/img" style). Returns true
+# when the directory exists afterwards.
+extern "C":
+    func still_dir_make(path: str) -> int
+
+func make_dir(path: str) -> bool:
+    return still_dir_make(path) == 1
