@@ -1,3 +1,41 @@
+# Still v0.6.4 — three code-generation fixes found by Wingram's GUI
+
+Wingram's release exe opened a white window and crashed instantly on first
+launch while its headless selftest was green. Root cause: three emitter
+bugs in paths that only the real GUI loop exercises (an AddressSanitizer
+harness running the app's actual generated C on Linux found all of them;
+the Windows heap crash was the first one).
+
+- **`d.get(key, x.f)` with a field fallback freed the fallback.**
+  The default branch of `dict.get` borrowed the fallback expression without
+  retaining it while the result temp claimed ownership. For
+  `app.adapter.instance = cfg.get("account.fediverse_instance",
+  app.adapter.instance)` on a fresh install (no config.ini) the field was
+  released and a dangling pointer stored — the next `App` clone read freed
+  memory and the process died before the first frame painted. The default
+  branch now produces an owned value (temps consumed, borrowed reads
+  retained).
+- **if/elif condition temps leaked on the else path.**
+  Per-statement temp flushing attached the condition's releases to the
+  then-branch only, so every non-matching elif leaked its literal strings —
+  `draw_nav_rail` leaked ~36 strings per frame. Condition temps now live in
+  a pending-registry: branches flush only their own temps, returns and
+  break/continue release every in-scope pending temp, and the chain's join
+  releases the condition temps exactly once per runtime path.
+- **`A and B` / `A or B` re-evaluated `A`.**
+  The old form duplicated the left operand's code into the short-circuit
+  branch: side effects ran twice (a button drew twice) and owned string
+  arguments were consumed twice — `draw_button(..., "prev") and idx > 0`
+  crashed on use-after-free. Both operators now evaluate `A` exactly once,
+  materialize it as an owned temp, and emit `B` lazily inside the taken
+  branch.
+
+Also: the gui font cache doubled to 32 slots (Wingram's font size/weight
+combos overflowed 16, silently drawing wrong sizes after the first frames).
+
+The full conformance suite, all examples, and Wingram's selftest pass on
+this compiler; Wingram's 240-frame click-through under ASan is clean.
+
 # Still v0.6.3 — net header hardening
 
 `still_net_header(id, name)` no longer reads the whole raw response-header

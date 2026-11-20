@@ -24,6 +24,13 @@ pub struct Emitter {
     tmpc: u32,
     locals: Vec<LocalSlot>,
     temps: Vec<(String, Ty)>,
+    /// Condition temps of open if/elif chains: (name, ty, loop_depth at
+    /// registration). Kept OFF the per-statement temp stack so branch
+    /// statements and nested returns cannot pop them; released at the
+    /// chain's join point, or earlier by return/break/continue paths.
+    pending_cond: Vec<(String, Ty, usize)>,
+    /// Current loop-body nesting depth (emit_loop_body increments).
+    loop_depth: usize,
     temp_set: HashSet<String>,
     loop_local_marks: Vec<usize>,
     loop_temp_marks: Vec<usize>,
@@ -107,6 +114,8 @@ pub fn emit(prog: &Program) -> String {
         tmpc: 0,
         locals: Vec::new(),
         temps: Vec::new(),
+            pending_cond: Vec::new(),
+            loop_depth: 0,
         temp_set: HashSet::new(),
         loop_local_marks: Vec::new(),
         loop_temp_marks: Vec::new(),
@@ -377,6 +386,33 @@ impl Emitter {
 
     fn is_temp(&self, expr: &str) -> bool {
         self.temp_set.contains(expr)
+    }
+
+    /// Release pending condition temps that were registered inside the
+    /// innermost loop body (break/continue exits them all). Their ifs' join
+    /// copies remain for the other runtime paths and stay dead here.
+    fn release_pending_in_loop(&mut self) {
+        let cur = self.loop_depth;
+        let inside: Vec<(String, Ty)> = self
+            .pending_cond
+            .iter()
+            .filter(|(_, _, d)| *d >= cur)
+            .map(|(n, t, _)| (n.clone(), t.clone()))
+            .collect();
+        self.emit_pending_releases(&inside);
+    }
+
+    /// Emit releases for the given pending condition temps (used at an
+    /// if-chain's join point and by return/break/continue exits). All these
+    /// temps are declared at their if's level, which encloses the exit, so
+    /// they are always in scope here.
+    fn emit_pending_releases(&mut self, temps: &[(String, Ty)]) {
+        for (name, ty) in temps {
+            let d = self.drop_stmt(&resolve_deep(ty), name);
+            if !d.is_empty() {
+                self.line(d);
+            }
+        }
     }
 
     fn drop_temps_to(&mut self, mark: usize) {
@@ -1302,16 +1338,46 @@ impl Emitter {
             }
             CS::If { cond, then, els } => {
                 self.bp(&cond.span);
+                // Condition temps must live across the whole branch chain:
+                // per-statement flushing (emit_stmt end) would otherwise
+                // attach their release to the then-branch only, leaking the
+                // condition's strings whenever an else path runs. They are
+                // moved off the per-statement temp stack into `pending_cond`
+                // (branch statements and nested returns can never pop them),
+                // and released exactly once per runtime path: at the join
+                // point after the chain, or earlier by return/break/continue
+                // (which emit releases for every in-scope pending temp; the
+                // join's copy is unreachable on those paths and harmless).
+                let m0 = self.temps.len();
                 let c = self.emit_expr(cond);
+                let m1 = self.temps.len();
+                let mut cond_temps: Vec<(String, Ty)> = Vec::new();
+                while self.temps.len() > m0 {
+                    let (name, ty) = self.temps.pop().unwrap();
+                    self.temp_set.remove(&name);
+                    self.pending_cond.push((name.clone(), ty.clone(), self.loop_depth));
+                    cond_temps.push((name, ty));
+                }
+                let _ = m1;
+                self.body_local_marks.push(m0);
                 let t = self.truthy(&resolve_deep(&cond.ty), &c);
                 self.line(format!("if ({}) {{", t));
                 self.emit_block(then);
+                self.drop_temps_to(m0);
                 if els.is_empty() {
                     self.raw("    }");
                 } else {
                     self.raw("    } else {");
                     self.emit_block(els);
+                    self.drop_temps_to(m0);
                     self.raw("    }");
+                }
+                self.body_local_marks.pop();
+                self.emit_pending_releases(&cond_temps);
+                for (name, _) in &cond_temps {
+                    if let Some(pos) = self.pending_cond.iter().position(|(n, _, _)| n == name) {
+                        self.pending_cond.remove(pos);
+                    }
                 }
                 self.last_line += 2;
             }
@@ -1631,6 +1697,16 @@ impl Emitter {
                 }
                 self.drop_all_locals();
                 self.drop_temps_to(0);
+                // pending condition temps of open if-chains are in scope at
+                // any return point (their ifs enclose it); release them here.
+                // The join copies after the chain stay as dead code on this
+                // path, so nothing is double-released at runtime.
+                let pending: Vec<(String, Ty)> = self
+                    .pending_cond
+                    .iter()
+                    .map(|(n, t, _)| (n.clone(), t.clone()))
+                    .collect();
+                self.emit_pending_releases(&pending);
                 match ret_expr {
                     Some(expr) => {
                         if matches!(ret, Ty::NoneTy) && expr != "0" {
@@ -1652,6 +1728,7 @@ impl Emitter {
             }
             CS::Break(_) => {
                 self.drop_temps_to(*self.loop_temp_marks.last().unwrap_or(&0));
+                self.release_pending_in_loop();
                 let lmark = *self.loop_local_marks.last().unwrap_or(&0);
                 for id in (lmark..self.locals.len()).rev() {
                     self.drop_local(id as u32);
@@ -1661,6 +1738,7 @@ impl Emitter {
             }
             CS::Continue(_) => {
                 self.drop_temps_to(*self.loop_temp_marks.last().unwrap_or(&0));
+                self.release_pending_in_loop();
                 let lmark = *self.loop_local_marks.last().unwrap_or(&0);
                 for id in (lmark..self.locals.len()).rev() {
                     self.drop_local(id as u32);
@@ -1682,7 +1760,9 @@ impl Emitter {
     fn emit_loop_body(&mut self, body: &[CS]) {
         let tmark = self.temps.len();
         self.body_local_marks.push(tmark);
+        self.loop_depth += 1;
         self.emit_block(body);
+        self.loop_depth -= 1;
         self.drop_temps_to(tmark);
         self.body_local_marks.pop();
     }
@@ -2501,14 +2581,83 @@ impl Emitter {
                 self.emit_arith(*op, &le, &l.ty, &re, &r.ty, &sp)
             }
             X::And(l, r) => {
+                // `A and B`: A is evaluated exactly ONCE and materialized as
+                // an owned temp; B is emitted lazily inside the true branch.
+                // The previous form re-evaluated A in the else path, which
+                // duplicated call side effects and double-consumed owned
+                // string arguments (use-after-free).
+                self.set_line(&sp);
                 let le = self.emit_expr(l);
-                let re = self.emit_expr(r);
-                self.emit_cond_value(&le, &resolve_deep(&l.ty), &re, &resolve_deep(&r.ty), &resolve_deep(&tx.ty), true)
+                let lty = resolve_deep(&l.ty);
+                let rty = resolve_deep(&r.ty);
+                let resty = resolve_deep(&tx.ty);
+                let ta = self.newtmp();
+                let cta = self.ctype(&lty);
+                let ta_init = self.owned_value(&le, &lty);
+                self.line(format!("{} {} = {};", cta, ta, ta_init));
+                let tvar = self.newtmp();
+                let ct = self.ctype(&resty);
+                self.line(format!("{} {};", ct, tvar));
+                let lt = self.truthy(&lty, &ta);
+                self.line(format!("if ({}) {{", lt));
+                if matches!(rty, Ty::NoneTy) {
+                    let z = self.zero_c(&resty);
+                    self.line(format!("{} = {};", tvar, z));
+                } else {
+                    // B is emitted inside this branch scope: flush the temps
+                    // its expression leaves behind HERE (they are declared in
+                    // this scope and would be out of scope at statement end).
+                    let bmark = self.temps.len();
+                    let re = self.emit_expr(r);
+                    let rv = self.owned_value(&re, &rty);
+                    self.line(format!("{} = {};", tvar, rv));
+                    self.drop_temps_to(bmark);
+                }
+                let d = self.drop_stmt(&lty, &ta);
+                if !d.is_empty() {
+                    self.line(d);
+                }
+                self.raw("    } else {");
+                self.line(format!("{} = {};", tvar, ta));
+                self.raw("    }");
+                self.reg_temp(&tvar, resty.clone());
+                tvar
             }
             X::Or(l, r) => {
+                // `A or B`: A evaluated once; B lazily in the false branch.
+                self.set_line(&sp);
                 let le = self.emit_expr(l);
-                let re = self.emit_expr(r);
-                self.emit_cond_value(&le, &resolve_deep(&l.ty), &re, &resolve_deep(&r.ty), &resolve_deep(&tx.ty), false)
+                let lty = resolve_deep(&l.ty);
+                let rty = resolve_deep(&r.ty);
+                let resty = resolve_deep(&tx.ty);
+                let ta = self.newtmp();
+                let cta = self.ctype(&lty);
+                let ta_init = self.owned_value(&le, &lty);
+                self.line(format!("{} {} = {};", cta, ta, ta_init));
+                let tvar = self.newtmp();
+                let ct = self.ctype(&resty);
+                self.line(format!("{} {};", ct, tvar));
+                let lt = self.truthy(&lty, &ta);
+                self.line(format!("if ({}) {{", lt));
+                self.line(format!("{} = {};", tvar, ta));
+                self.raw("    } else {");
+                if matches!(rty, Ty::NoneTy) {
+                    let z = self.zero_c(&resty);
+                    self.line(format!("{} = {};", tvar, z));
+                } else {
+                    let bmark = self.temps.len();
+                    let re = self.emit_expr(r);
+                    let rv = self.owned_value(&re, &rty);
+                    self.line(format!("{} = {};", tvar, rv));
+                    self.drop_temps_to(bmark);
+                }
+                let d = self.drop_stmt(&lty, &ta);
+                if !d.is_empty() {
+                    self.line(d);
+                }
+                self.raw("    }");
+                self.reg_temp(&tvar, resty.clone());
+                tvar
             }
             X::Cmp(op, l, r) => {
                 let le = self.emit_expr(l);
@@ -2904,36 +3053,6 @@ impl Emitter {
         }
     }
 
-    fn emit_cond_value(&mut self, le: &str, lty: &Ty, re: &str, rty: &Ty, resty: &Ty, is_and: bool) -> String {
-        let lt = self.truthy(lty, le);
-        let tvar = self.newtmp();
-        let __h0 = self.ctype(&resolve_deep(resty));
-        self.line(format!("{} {};", __h0, tvar));
-        if is_and {
-            self.line(format!("if ({}) {{", lt));
-            let rv = self.owned_value(re, rty);
-            self.line(format!("{} = {};", tvar, rv));
-            self.rel_if_owned(le, lty);
-            self.raw("    } else {");
-            let lv = self.owned_value(le, lty);
-            self.line(format!("{} = {};", tvar, lv));
-            self.raw("    }");
-        } else {
-            self.line(format!("if ({}) {{", lt));
-            let lv = self.owned_value(le, lty);
-            self.line(format!("{} = {};", tvar, lv));
-            self.rel_if_owned(re, rty);
-            self.raw("    } else {");
-            let rv = self.owned_value(re, rty);
-            self.line(format!("{} = {};", tvar, rv));
-            self.raw("    }");
-        }
-        if self.ty_has_refs(&resolve_deep(resty)) || matches!(resolve_deep(resty), Ty::Tuple(_) | Ty::Named(_) | Ty::Nullable(_)) {
-            self.reg_temp(&tvar, resolve_deep(resty));
-        }
-        tvar
-    }
-
     fn emit_cmp(&mut self, op: CmpOp, le: &str, lty: &Ty, re: &str, rty: &Ty, sp: &Span) -> String {
         self.set_line(sp);
         let lt = resolve_deep(lty);
@@ -3257,6 +3376,10 @@ impl Emitter {
                     "get" => {
                         // d.get(key, default): value ownership moves in; key is borrowed
                         // (the statement-temp release of the key matches plain dict reads).
+                        // The default branch MUST yield an owned value: a fallback that
+                        // aliases the assignment target (x.f = d.get(k, x.f)) is a
+                        // borrowed field read, so retain it — otherwise the assignment
+                        // releases the target and leaves the temp dangling (UAF).
                         let vty = resolve_deep(v);
                         let kt = self.emit_expr(&args[0]);
                         let dv = self.emit_expr(&args[1]);
@@ -3267,8 +3390,8 @@ impl Emitter {
                         self.line(format!("if (still_dict_{}_{}_has({}, {})) {{", ktag, vtag, re, kt));
                         self.line(format!("{} = still_dict_{}_{}_get({}, {}, __FILE__, __LINE__);", t, ktag, vtag, re, kt));
                         self.line("} else {".into());
-                        self.unreg_temp(&dv);
-                        self.line(format!("{} = {};", t, dv));
+                        let owned_dv = self.owned_value(&dv, &vty);
+                        self.line(format!("{} = {};", t, owned_dv));
                         self.line("}".into());
                         self.reg_temp(&t, vty);
                         t

@@ -415,7 +415,7 @@ void still_net_free(int64_t id) {
 /* ============================================================ gui: Win32 window + GDI */
 
 #define STIL_GUI_MAX 8
-#define STIL_GUI_FONT_CACHE 16
+#define STIL_GUI_FONT_CACHE 32
 
 typedef struct {
     double size;      /* positive = regular, negative = semibold */

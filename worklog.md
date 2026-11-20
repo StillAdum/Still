@@ -1,3 +1,10 @@
+## v0.6.4 — GUI code-generation fixes (2026-11-20)
+
+Reproduced Wingram's white-window crash by running its real generated C
+under ASan with a fake gui backend on Linux. Three emitter bugs fixed
+(dict.get field-fallback UAF; if/elif condition-temp leak; and/or double
+evaluation), font cache 16→32. Conformance green. See RELEASE_NOTES.md.
+
 # Still — Worklog
 
 State: **v0.4.1+ (unreleased) — struct mutation semantics (roadmap item 1): methods mutate `self` in place via by-pointer receivers, list/dict element + field-of-element writes mutate real storage, `for e in list` binds struct elements as in-place proxies; plus two refcount fixes in the list/dict `_set` macros. See ROADMAP-STATUS.md for the honest phase-by-phase mapping.** Read this before touching anything. Token-dense on purpose.
