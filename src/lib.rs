@@ -25,6 +25,7 @@ pub const STD_OS: &str = include_str!("stdlib/os.strc");
 pub const STD_JSON: &str = include_str!("stdlib/json.strc");
 pub const STD_VEC: &str = include_str!("stdlib/vec.strc");
 pub const STD_GUI: &str = include_str!("stdlib/gui.strc");
+pub const STD_WEBVIEW: &str = include_str!("stdlib/webview.strc");
 pub const STD_NET: &str = include_str!("stdlib/net.strc");
 pub const STD_NET_ROLLBACK: &str = include_str!("stdlib/net_rollback.strc");
 pub const STD_AUDIO: &str = include_str!("stdlib/audio.strc");
@@ -78,6 +79,7 @@ pub fn std_modules() -> Vec<(&'static str, &'static str)> {
         ("json", STD_JSON),
         ("vec", STD_VEC),
         ("gui", STD_GUI),
+        ("webview", STD_WEBVIEW),
         ("net", STD_NET),
         ("net_rollback", STD_NET_ROLLBACK),
         ("audio", STD_AUDIO),

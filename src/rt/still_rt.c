@@ -3387,12 +3387,20 @@ const char* still_webview_cookie(const char* name) {
     return "";
 }
 
+static int g_wv2_probe_done = 0;
+static int g_wv2_probe_result = 0;
+
 int64_t still_webview_available(void) {
+    /* cached: the login screen calls this every frame and probing the
+       registry each time would be wasteful */
+    if (g_wv2_probe_done) return (int64_t)g_wv2_probe_result;
     g_wv2_error[0] = 0;
     wv2_ensure_loader();
     if (!g_wv2_loader) {
         snprintf(g_wv2_error, sizeof(g_wv2_error),
                  "WebView2Loader.dll was not found next to wingram.exe");
+        g_wv2_probe_done = 1;
+        g_wv2_probe_result = 0;
         return 0;
     }
     typedef long (__stdcall *GetVerFn)(const unsigned short*, unsigned short**);
@@ -3400,6 +3408,8 @@ int64_t still_webview_available(void) {
     if (!get_ver) {
         snprintf(g_wv2_error, sizeof(g_wv2_error),
                  "WebView2Loader.dll is missing required exports");
+        g_wv2_probe_done = 1;
+        g_wv2_probe_result = 0;
         return 0;
     }
     unsigned short* ver = NULL;
@@ -3408,6 +3418,8 @@ int64_t still_webview_available(void) {
         if (ver) wv2_cofree(ver);
         snprintf(g_wv2_error, sizeof(g_wv2_error),
                  "the WebView2 runtime is not installed (Edge update missing)");
+        g_wv2_probe_done = 1;
+        g_wv2_probe_result = 0;
         return 0;
     }
     char* v = still_narrow(ver);
@@ -3416,6 +3428,8 @@ int64_t still_webview_available(void) {
         free(v);
     }
     wv2_cofree(ver);
+    g_wv2_probe_done = 1;
+    g_wv2_probe_result = 1;
     return 1;
 }
 

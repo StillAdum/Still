@@ -1,3 +1,10 @@
+# Still v0.6.7 — cache the WebView2 availability probe
+
+- still_webview_available() now probes WebView2 once and caches the result
+  (the login UI calls it every frame; repeated registry probes were wasted
+  work). still_webview_login still verifies the loader before use.
+- conformance 68/68.
+
 # Still v0.6.6 — io.make_dir
 
 - **io.make_dir(path) / still_dir_make:** create directories for app-side

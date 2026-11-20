@@ -305,3 +305,6 @@ cargo test --release
 
 ## 2026-11-21 — v0.6.6
 - io.make_dir / still_dir_make
+
+## 2026-11-21 — v0.6.7
+- cache still_webview_available probe
