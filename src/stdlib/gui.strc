@@ -43,6 +43,8 @@ extern "C":
     func still_gui_clip_push(win: int, x: float, y: float, w: float, h: float)
     func still_gui_clip_pop(win: int)
     func still_gui_draw_image(win: int, img: int, x: float, y: float, w: float, h: float)
+    func still_gui_dpi(win: int) -> int
+    func still_gui_system_dpi() -> int
 
 func available() -> bool:
     return still_gui_available() == 1
@@ -127,6 +129,15 @@ func clip_pop(win: int):
 
 func draw_image(win: int, img: int, x: float, y: float, w: float, h: float):
     still_gui_draw_image(win, img, x, y, w, h)
+
+# DPI of the monitor the window is on (96 on classic displays, 120/144/168...
+# on scaled ones). Multiply UI metrics by dpi/96 for correct scaling.
+func dpi(win: int) -> int:
+    return still_gui_dpi(win)
+
+# DPI of the primary monitor, available before any window exists.
+func system_dpi() -> int:
+    return still_gui_system_dpi()
 
 # Virtual-key codes for key() / key_pressed()
 VK_BACK = 8

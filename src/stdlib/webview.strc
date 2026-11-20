@@ -1,0 +1,43 @@
+# webview — an embedded Edge (WebView2) browser for OAuth-style logins
+#
+# The classic use case: sign in to a website that has no usable API. Call
+# login(start_url, poll_url): a real browser window opens (2FA, checkpoints
+# and "remember me" all work), the runtime polls that site's cookies in the
+# background, and as soon as they exist the window closes by itself. Read
+# the captured values with cookie(name) — e.g. "sessionid" for Instagram.
+#
+# Requirements on Windows: WebView2Loader.dll next to the executable (the
+# winggram release zip ships it) and the Edge WebView2 runtime, which every
+# up-to-date Windows 10/11 has. On other platforms available() is false.
+#
+# Return codes of login():
+#   1 = cookies captured (check cookie(name) for each one you need)
+#   2 = the user closed the window without signing in
+#   3 = webview unavailable (read last_error())
+
+extern "C":
+    func still_webview_available() -> int
+    func still_webview_runtime_version() -> str
+    func still_webview_last_error() -> str
+    func still_webview_login(start_url: str, poll_url: str) -> int
+    func still_webview_cookie(name: str) -> str
+
+func available() -> bool:
+    return still_webview_available() == 1
+
+func runtime_version() -> str:
+    return still_webview_runtime_version()
+
+func last_error() -> str:
+    return still_webview_last_error()
+
+# Blocking: opens the login window and returns when done (see codes above).
+func login(start_url: str, poll_url: str) -> int:
+    return still_webview_login(start_url, poll_url)
+
+func cookie(name: str) -> str:
+    return still_webview_cookie(name)
+
+# convenience: did a non-empty cookie with this name get captured?
+func has_cookie(name: str) -> bool:
+    return still_webview_cookie(name) != ""

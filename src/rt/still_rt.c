@@ -2294,6 +2294,18 @@ const char* still_net_body(int64_t id) {
     return g_net_slots[id].body ? g_net_slots[id].body : "";
 }
 
+/* Save a response body to disk byte-for-byte (binary safe: images, audio).
+   Returns 1 on success, 0 on failure. The slot stays open until net.free. */
+int64_t still_net_save_body(int64_t id, const char* path) {
+    if (id < 0 || id >= STIL_NET_SLOTS || !g_net_slots[id].used || !path || !path[0]) return 0;
+    if (!g_net_slots[id].body || g_net_slots[id].body_len == 0) return 0;
+    FILE* f = fopen(path, "wb");
+    if (!f) return 0;
+    size_t n = fwrite(g_net_slots[id].body, 1, g_net_slots[id].body_len, f);
+    fclose(f);
+    return (n == g_net_slots[id].body_len) ? 1 : 0;
+}
+
 void still_net_free(int64_t id) {
     if (id < 0 || id >= STIL_NET_SLOTS) return;
     net_slot_free(id);
@@ -2308,6 +2320,20 @@ typedef struct {
     double size;      /* positive = regular, negative = semibold */
     HFONT font;
 } StilFontSlot;
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
+/* Minimal MINMAXINFO replica (avoids depending on SDK header versions) */
+typedef struct {
+    POINT ptReserved1;
+    POINT ptReserved2;
+    POINT ptMaxSize;
+    POINT ptMaxPosition;
+    POINT ptMinTrackSize;
+    POINT ptMaxTrackSize;
+} StilMinMaxInfo;
 
 typedef struct {
     HWND hwnd;
@@ -2327,6 +2353,7 @@ typedef struct {
     unsigned char keys_edge[256];
     StilFontSlot fonts[STIL_GUI_FONT_CACHE];
     int font_count;
+    int dpi;
 } StilWindow;
 
 static StilWindow g_wins[STIL_GUI_MAX];
@@ -2376,6 +2403,28 @@ LRESULT CALLBACK gui_wndproc_real(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (w) w->wheel += (short)HIWORD(wp);
             return 0;
         }
+        case WM_GETMINMAXINFO: {
+            /* keep the window resizable/maximizable with a sane minimum size */
+            StilMinMaxInfo* mmi = (StilMinMaxInfo*)lp;
+            if (mmi) {
+                UINT dpi = (w && w->dpi > 0) ? (UINT)w->dpi : 96;
+                mmi->ptMinTrackSize.x = (LONG)(460 * dpi / 96);
+                mmi->ptMinTrackSize.y = (LONG)(320 * dpi / 96);
+                mmi->ptMaxTrackSize.x = GetSystemMetrics(SM_CXMAXTRACK);
+                mmi->ptMaxTrackSize.y = GetSystemMetrics(SM_CYMAXTRACK);
+            }
+            return 0;
+        }
+        case WM_DPICHANGED: {
+            if (w) w->dpi = (int)LOWORD(wp);
+            RECT* sugg = (RECT*)lp;
+            if (sugg) {
+                SetWindowPos(hwnd, NULL, sugg->left, sugg->top,
+                             sugg->right - sugg->left, sugg->bottom - sugg->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+            return 0;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             BeginPaint(hwnd, &ps);
@@ -2409,16 +2458,42 @@ int64_t still_gui_available(void) {
     return 1;
 }
 
+static UINT gui_window_dpi(HWND hwnd) {
+    typedef UINT (WINAPI *GetDpiForWindowFn)(HWND);
+    GetDpiForWindowFn f = (GetDpiForWindowFn)GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForWindow");
+    if (f && hwnd) {
+        UINT d = f(hwnd);
+        if (d > 0) return d;
+    }
+    HDC hdc = GetDC(hwnd);
+    UINT d = (UINT)GetDeviceCaps(hdc, LOGPIXELSX);
+    ReleaseDC(hwnd, hdc);
+    return d ? d : 96;
+}
+
+/* Per-monitor-v2 DPI awareness so coordinates are real pixels and text is
+   crisp; falls back gracefully on older Windows. Must run before the first
+   window is created. */
+static void gui_enable_dpi_awareness(void) {
+    typedef BOOL (WINAPI *SetCtxFn)(void*);
+    SetCtxFn setctx = (SetCtxFn)GetProcAddress(GetModuleHandleA("user32.dll"), "SetProcessDpiAwarenessContext");
+    if (setctx) {
+        /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4 */
+        if (setctx((void*)(intptr_t)-4)) return;
+    }
+    typedef BOOL (WINAPI *DpiAwareFn)(void);
+    DpiAwareFn dpi = (DpiAwareFn)GetProcAddress(GetModuleHandleA("user32.dll"), "SetProcessDPIAware");
+    if (dpi) dpi();
+}
+
 int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
     if (w < 16) w = 16;
     if (h < 16) h = 16;
     if (w > 3840) w = 3840;
     if (h > 2160) h = 2160;
     gui_register_class();
-    /* 1:1 pixel mapping on high-DPI displays (graceful if missing) */
-    typedef void (WINAPI *DpiAwareFn)(void);
-    DpiAwareFn dpi = (DpiAwareFn)GetProcAddress(GetModuleHandleA("user32.dll"), "SetProcessDPIAware");
-    if (dpi) dpi();
+    /* crisp text and real-pixel coordinates on scaled displays */
+    gui_enable_dpi_awareness();
 
     int slot = -1;
     for (int i = 0; i < STIL_GUI_MAX; i++) {
@@ -2433,12 +2508,12 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
 
     const char* t = (title && title[0]) ? title : "Still";
     RECT r = {0, 0, (LONG)w, (LONG)h};
-    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW & ~(WS_THICKFRAME | WS_MAXIMIZEBOX), FALSE);
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     int ww = (int)(r.right - r.left);
     int wh = (int)(r.bottom - r.top);
 
     HWND hwnd = CreateWindowExA(0, "StillWindow", t,
-                                WS_OVERLAPPEDWINDOW & ~(WS_THICKFRAME | WS_MAXIMIZEBOX),
+                                WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT, CW_USEDEFAULT, ww, wh,
                                 NULL, NULL, GetModuleHandleA(NULL), NULL);
     if (!hwnd) {
@@ -2448,6 +2523,7 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
     win->hwnd = hwnd;
     win->w = (int)w;
     win->h = (int)h;
+    win->dpi = (int)gui_window_dpi(hwnd);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
     return (int64_t)(uintptr_t)hwnd;
@@ -2586,6 +2662,25 @@ int64_t still_gui_height(int64_t handle) {
 int64_t still_gui_mouse_x(int64_t handle) {
     StilWindow* w = gui_win(handle);
     return w ? w->mouse_x : -1;
+}
+
+int64_t still_gui_dpi(int64_t handle) {
+    StilWindow* w = gui_win(handle);
+    if (w && w->dpi > 0) return (int64_t)w->dpi;
+    return still_gui_system_dpi();
+}
+
+int64_t still_gui_system_dpi(void) {
+    typedef UINT (WINAPI *GetDpiSysFn)(void);
+    GetDpiSysFn f = (GetDpiSysFn)GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForSystem");
+    if (f) {
+        UINT d = f();
+        if (d > 0) return (int64_t)d;
+    }
+    HDC hdc = GetDC(NULL);
+    UINT d = (UINT)GetDeviceCaps(hdc, LOGPIXELSX);
+    ReleaseDC(NULL, hdc);
+    return d ? (int64_t)d : 96;
 }
 
 int64_t still_gui_mouse_y(int64_t handle) {
@@ -2959,6 +3054,514 @@ void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, doubl
     p_GdipDeleteGraphics(g);
 }
 
+/* ============================================================ webview: WebView2 login dialog
+   An embedded Edge (WebView2) window for in-app OAuth-style logins. The app
+   calls still_webview_login(start_url, poll_url): a real browser window
+   opens, the user signs in normally (2FA, checkpoints, "remember me" all
+   work), and the runtime polls the WebView2 cookie manager until the wanted
+   cookies appear. Values are read back with still_webview_cookie(name).
+   Everything is loaded dynamically: WebView2Loader.dll (shipped next to the
+   exe) and ole32 for COM init. No SDK headers needed: WebView2's COM
+   vtables are invoked by slot index, verified against WebView2.h from the
+   Microsoft.Web.WebView2 1.0.2903.40 package. */
+
+#define WV2_COOKIE_MAX 16
+
+typedef struct {
+    char name[64];
+    char value[512];
+} StilWVCookie;
+
+static void* g_wv2_loader = NULL;
+static char g_wv2_error[512] = {0};
+static char g_wv2_version[128] = {0};
+static StilWVCookie g_wv2_cookies[WV2_COOKIE_MAX];
+static int g_wv2_cookie_count = 0;
+
+/* live dialog state */
+static void* g_wv2_env_obj = NULL;
+static void* g_wv2_ctrl_obj = NULL;
+static void* g_wv2_web_obj = NULL;
+static void* g_wv2_pending_cm = NULL;
+static HWND g_wv2_hwnd = NULL;
+static int g_wv2_status = 0;   /* 0 running, 1 cookies captured, 2 user closed, 3 error */
+static unsigned short* g_wv2_poll_url_w = NULL;
+static unsigned short* g_wv2_start_url_w = NULL;
+
+/* vtable slot indices (counted from WebView2.h interface declarations) */
+#define WV2_WEBVIEW_NAVIGATE 5
+#define WV2_WEBVIEW2_GET_COOKIEMANAGER 66   /* ICoreWebView2_2: IUnknown(3) + ICoreWebView2(58) + 5th member */
+#define WV2_CTRL_PUT_ISVISIBLE 4
+#define WV2_CTRL_PUT_BOUNDS 6
+#define WV2_CTRL_CLOSE 24
+#define WV2_CTRL_GET_WEBVIEW 25
+#define WV2_ENV_CREATE_CONTROLLER 3
+#define WV2_CM_GET_COOKIES 5
+#define WV2_CLIST_COUNT 3
+#define WV2_CLIST_VALUE_AT 4
+#define WV2_COOKIE_GET_NAME 3
+#define WV2_COOKIE_GET_VALUE 4
+
+typedef long (__stdcall *WV2Fn0)(void*);
+typedef long (__stdcall *WV2FnV)(void*, void**);
+typedef long (__stdcall *WV2FnVP)(void*, void*, void*);
+typedef long (__stdcall *WV2FnW)(void*, const unsigned short*);
+typedef long (__stdcall *WV2FnHwnd)(void*, HWND, void*);
+typedef long (__stdcall *WV2FnInt)(void*, int);
+typedef long (__stdcall *WV2FnRect)(void*, RECT);
+typedef long (__stdcall *WV2FnU32P)(void*, unsigned int*);
+typedef long (__stdcall *WV2FnU32VP)(void*, unsigned int, void**);
+
+#ifndef SPI_GETWORKAREA
+#define SPI_GETWORKAREA 0x0030
+#endif
+#ifndef WM_TIMER
+#define WM_TIMER 0x0113
+#endif
+
+static void* wv2_slot(void* obj, int idx) {
+    if (!obj) return NULL;
+    void** vt = *(void***)obj;
+    if (!vt) return NULL;
+    return vt[idx];
+}
+
+static unsigned long wv2_release(void* obj) {
+    WV2Fn0 f = (WV2Fn0)wv2_slot(obj, 2);
+    return f ? f(obj) : 0;
+}
+
+/* CoTaskMemFree — strings returned by WebView2 property getters are
+   allocated with the COM task allocator. ole32 stays loaded forever
+   (harmless) so later frees still work. */
+static void wv2_cofree(void* p) {
+    if (!p) return;
+    static void (__stdcall *cofree_fn)(void*) = NULL;
+    if (!cofree_fn) {
+        HMODULE ole = GetModuleHandleA("ole32.dll");
+        if (!ole) ole = LoadLibraryA("ole32.dll");
+        if (ole) cofree_fn = (void (__stdcall *)(void*))GetProcAddress(ole, "CoTaskMemFree");
+    }
+    if (cofree_fn) cofree_fn(p);
+}
+
+static char* wv2_get_cookie_value(const char* name) {
+    if (!name) return NULL;
+    for (int i = 0; i < g_wv2_cookie_count; i++) {
+        if (strcmp(g_wv2_cookies[i].name, name) == 0) {
+            size_t n = strlen(g_wv2_cookies[i].value) + 1;
+            char* out = (char*)malloc(n);
+            if (out) memcpy(out, g_wv2_cookies[i].value, n);
+            return out;
+        }
+    }
+    return NULL;
+}
+
+/* COM handler objects: the loader/WebView2 call Invoke directly on the
+   pointer we pass, so the object is just a vtable pointer. */
+typedef struct { void* vtbl; } StilHandler;
+
+static long __stdcall wv2_qi(void* self, const void* riid, void** out) {
+    (void)self; (void)riid;
+    if (out) *out = NULL;
+    return (long)0x80004002L; /* E_NOINTERFACE (handlers are never QI'd) */
+}
+static unsigned long __stdcall wv2_ref(void* self) { (void)self; return 1; }
+
+static void* g_wv2_env_vt[4];
+static void* g_wv2_ctrl_vt[4];
+static void* g_wv2_cookies_vt[4];
+static int g_wv2_vts_ready = 0;
+
+static long __stdcall wv2_env_invoke(void* self, long result, void* env);
+static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl);
+static long __stdcall wv2_cookies_invoke(void* self, long result, void* list);
+
+static void wv2_init_vtables(void) {
+    if (g_wv2_vts_ready) return;
+    g_wv2_env_vt[0] = (void*)wv2_qi;
+    g_wv2_env_vt[1] = (void*)wv2_ref;
+    g_wv2_env_vt[2] = (void*)wv2_ref;
+    g_wv2_env_vt[3] = (void*)wv2_env_invoke;
+    g_wv2_ctrl_vt[0] = (void*)wv2_qi;
+    g_wv2_ctrl_vt[1] = (void*)wv2_ref;
+    g_wv2_ctrl_vt[2] = (void*)wv2_ref;
+    g_wv2_ctrl_vt[3] = (void*)wv2_ctrl_invoke;
+    g_wv2_cookies_vt[0] = (void*)wv2_qi;
+    g_wv2_cookies_vt[1] = (void*)wv2_ref;
+    g_wv2_cookies_vt[2] = (void*)wv2_ref;
+    g_wv2_cookies_vt[3] = (void*)wv2_cookies_invoke;
+    g_wv2_vts_ready = 1;
+}
+
+static StilHandler g_wv2_env_handler = { NULL };
+static StilHandler g_wv2_ctrl_handler = { NULL };
+static StilHandler g_wv2_cookies_handler = { NULL };
+
+static void wv2_set_cookie(const char* name, const char* value) {
+    if (!name || !value) return;
+    for (int i = 0; i < g_wv2_cookie_count; i++) {
+        if (strcmp(g_wv2_cookies[i].name, name) == 0) {
+            snprintf(g_wv2_cookies[i].value, sizeof(g_wv2_cookies[i].value), "%s", value);
+            return;
+        }
+    }
+    if (g_wv2_cookie_count >= WV2_COOKIE_MAX) return;
+    StilWVCookie* c = &g_wv2_cookies[g_wv2_cookie_count];
+    snprintf(c->name, sizeof(c->name), "%s", name);
+    snprintf(c->value, sizeof(c->value), "%s", value);
+    g_wv2_cookie_count++;
+}
+
+static void wv2_resize(void) {
+    if (!g_wv2_ctrl_obj || !g_wv2_hwnd) return;
+    RECT cr;
+    if (!GetClientRect(g_wv2_hwnd, &cr)) return;
+    WV2FnRect bounds_fn = (WV2FnRect)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_PUT_BOUNDS);
+    if (bounds_fn) bounds_fn(g_wv2_ctrl_obj, cr);
+}
+
+static void wv2_poll_cookies(void) {
+    if (g_wv2_status != 0 || !g_wv2_web_obj) return;
+    /* keep the cookie manager alive until its async result arrives:
+       release the previous poll's manager only now */
+    if (g_wv2_pending_cm) {
+        wv2_release(g_wv2_pending_cm);
+        g_wv2_pending_cm = NULL;
+    }
+    WV2FnV get_cm = (WV2FnV)wv2_slot(g_wv2_web_obj, WV2_WEBVIEW2_GET_COOKIEMANAGER);
+    if (!get_cm) return;
+    void* cm = NULL;
+    if (get_cm(g_wv2_web_obj, &cm) != 0 || !cm) return;
+    WV2FnVP get_cookies = (WV2FnVP)wv2_slot(cm, WV2_CM_GET_COOKIES);
+    if (get_cookies && g_wv2_poll_url_w) {
+        get_cookies(cm, g_wv2_poll_url_w, (void*)&g_wv2_cookies_handler);
+        g_wv2_pending_cm = cm;
+    } else {
+        wv2_release(cm);
+    }
+}
+
+static long __stdcall wv2_cookies_invoke(void* self, long result, void* list) {
+    (void)self;
+    if (result != 0 || !list || g_wv2_status != 0) return 0;
+    WV2FnU32P count_fn = (WV2FnU32P)wv2_slot(list, WV2_CLIST_COUNT);
+    WV2FnU32VP at_fn = (WV2FnU32VP)wv2_slot(list, WV2_CLIST_VALUE_AT);
+    if (count_fn && at_fn) {
+        unsigned int count = 0;
+        if (count_fn(list, &count) == 0) {
+            if (count > 128) count = 128;
+            for (unsigned int i = 0; i < count; i++) {
+                void* cookie = NULL;
+                if (at_fn(list, i, &cookie) != 0 || !cookie) continue;
+                WV2FnV name_fn = (WV2FnV)wv2_slot(cookie, WV2_COOKIE_GET_NAME);
+                WV2FnV value_fn = (WV2FnV)wv2_slot(cookie, WV2_COOKIE_GET_VALUE);
+                if (name_fn && value_fn) {
+                    void* wname_v = NULL;
+                    void* wvalue_v = NULL;
+                    if (name_fn(cookie, &wname_v) == 0 && wname_v &&
+                        value_fn(cookie, &wvalue_v) == 0 && wvalue_v) {
+                        unsigned short* wname = (unsigned short*)wname_v;
+                        unsigned short* wvalue = (unsigned short*)wvalue_v;
+                        char* name = still_narrow(wname);
+                        char* value = still_narrow(wvalue);
+                        if (name && value) wv2_set_cookie(name, value);
+                        free(name);
+                        free(value);
+                    }
+                    if (wname_v) wv2_cofree(wname_v);
+                    if (wvalue_v) wv2_cofree(wvalue_v);
+                }
+                wv2_release(cookie);
+            }
+        }
+    }
+    wv2_release(list);
+    char* sid = wv2_get_cookie_value("sessionid");
+    if (sid && sid[0] != 0) {
+        g_wv2_status = 1;
+        PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+    }
+    free(sid);
+    return 0;
+}
+
+static long __stdcall wv2_env_invoke(void* self, long result, void* env) {
+    (void)self;
+    if (result != 0 || !env) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error),
+                 "webview environment failed (0x%08lx)", (unsigned long)result);
+        g_wv2_status = 3;
+        if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    g_wv2_env_obj = env;
+    WV2FnHwnd create = (WV2FnHwnd)wv2_slot(env, WV2_ENV_CREATE_CONTROLLER);
+    if (!create) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error), "webview environment too old");
+        g_wv2_status = 3;
+        if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    create(env, g_wv2_hwnd, (void*)&g_wv2_ctrl_handler);
+    return 0;
+}
+
+static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
+    (void)self;
+    if (result != 0 || !ctrl) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error),
+                 "webview controller failed (0x%08lx)", (unsigned long)result);
+        g_wv2_status = 3;
+        if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    g_wv2_ctrl_obj = ctrl;
+    WV2FnV get_web = (WV2FnV)wv2_slot(ctrl, WV2_CTRL_GET_WEBVIEW);
+    WV2FnInt vis_fn = (WV2FnInt)wv2_slot(ctrl, WV2_CTRL_PUT_ISVISIBLE);
+    if (get_web) get_web(ctrl, &g_wv2_web_obj);
+    if (vis_fn) vis_fn(ctrl, 1);
+    wv2_resize();
+    if (g_wv2_web_obj && g_wv2_start_url_w) {
+        WV2FnW nav = (WV2FnW)wv2_slot(g_wv2_web_obj, WV2_WEBVIEW_NAVIGATE);
+        if (nav) nav(g_wv2_web_obj, g_wv2_start_url_w);
+    }
+    if (g_wv2_hwnd) SetTimer(g_wv2_hwnd, 1, 1200, NULL);
+    return 0;
+}
+
+static LRESULT CALLBACK wv2_login_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_SIZE:
+            wv2_resize();
+            return 0;
+        case WM_TIMER:
+            if (wp == 1) wv2_poll_cookies();
+            return 0;
+        case WM_CLOSE:
+            if (g_wv2_status == 0) g_wv2_status = 2;
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+            KillTimer(hwnd, 1);
+            PostQuitMessage(0);
+            return 0;
+    }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+}
+
+static void* wv2_load_proc(const char* name) {
+    if (!g_wv2_loader) return NULL;
+    return (void*)GetProcAddress((HMODULE)g_wv2_loader, name);
+}
+
+/* Load WebView2Loader.dll from the exe directory first, then the PATH. */
+static void wv2_ensure_loader(void) {
+    if (g_wv2_loader) return;
+    char path[1024];
+    DWORD n = GetModuleFileNameA(NULL, path, (DWORD)sizeof(path) - 1);
+    if (n > 0 && n < sizeof(path)) {
+        path[n] = 0;
+        char* slash = strrchr(path, '\\');
+        if (slash) {
+            *(slash + 1) = 0;
+            strncat(path, "WebView2Loader.dll", sizeof(path) - strlen(path) - 1);
+            g_wv2_loader = (void*)LoadLibraryA(path);
+        }
+    }
+    if (!g_wv2_loader) {
+        g_wv2_loader = (void*)LoadLibraryA("WebView2Loader.dll");
+    }
+}
+
+const char* still_webview_last_error(void) {
+    return g_wv2_error[0] ? g_wv2_error : "";
+}
+
+const char* still_webview_cookie(const char* name) {
+    if (!name) return "";
+    for (int i = 0; i < g_wv2_cookie_count; i++) {
+        if (strcmp(g_wv2_cookies[i].name, name) == 0) return g_wv2_cookies[i].value;
+    }
+    return "";
+}
+
+int64_t still_webview_available(void) {
+    g_wv2_error[0] = 0;
+    wv2_ensure_loader();
+    if (!g_wv2_loader) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error),
+                 "WebView2Loader.dll was not found next to wingram.exe");
+        return 0;
+    }
+    typedef long (__stdcall *GetVerFn)(const unsigned short*, unsigned short**);
+    GetVerFn get_ver = (GetVerFn)wv2_load_proc("GetAvailableCoreWebView2BrowserVersionString");
+    if (!get_ver) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error),
+                 "WebView2Loader.dll is missing required exports");
+        return 0;
+    }
+    unsigned short* ver = NULL;
+    long hr = get_ver(NULL, &ver);
+    if (hr != 0 || !ver || !ver[0]) {
+        if (ver) wv2_cofree(ver);
+        snprintf(g_wv2_error, sizeof(g_wv2_error),
+                 "the WebView2 runtime is not installed (Edge update missing)");
+        return 0;
+    }
+    char* v = still_narrow(ver);
+    if (v) {
+        snprintf(g_wv2_version, sizeof(g_wv2_version), "%s", v);
+        free(v);
+    }
+    wv2_cofree(ver);
+    return 1;
+}
+
+const char* still_webview_runtime_version(void) {
+    if (g_wv2_version[0] == 0) still_webview_available();
+    return g_wv2_version;
+}
+
+/* Blocking: opens the login browser window and returns when the session
+   cookies are captured or the window is closed.
+   Returns 1 = cookies captured, 2 = window closed without login, 3 = error. */
+int64_t still_webview_login(const char* start_url, const char* poll_url) {
+    g_wv2_error[0] = 0;
+    g_wv2_cookie_count = 0;
+    g_wv2_status = 0;
+    g_wv2_env_obj = NULL;
+    g_wv2_ctrl_obj = NULL;
+    g_wv2_web_obj = NULL;
+    wv2_init_vtables();
+    g_wv2_env_handler.vtbl = (void*)g_wv2_env_vt;
+    g_wv2_ctrl_handler.vtbl = (void*)g_wv2_ctrl_vt;
+    g_wv2_cookies_handler.vtbl = (void*)g_wv2_cookies_vt;
+
+    if (still_webview_available() != 1) return 3;
+    typedef long (__stdcall *CreateEnvFn)(const unsigned short*, const unsigned short*, void*, void*);
+    CreateEnvFn create_env = (CreateEnvFn)wv2_load_proc("CreateCoreWebView2EnvironmentWithOptions");
+    if (!create_env) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error), "WebView2Loader.dll missing CreateCoreWebView2EnvironmentWithOptions");
+        return 3;
+    }
+
+    /* COM init (apartment-threaded) for cookie objects */
+    HMODULE ole = LoadLibraryA("ole32.dll");
+    typedef long (__stdcall *CoInitFn)(void*, unsigned long);
+    typedef void (__stdcall *CoUninitFn)(void);
+    CoInitFn co_init = ole ? (CoInitFn)GetProcAddress(ole, "CoInitializeEx") : NULL;
+    CoUninitFn co_uninit = ole ? (CoUninitFn)GetProcAddress(ole, "CoUninitialize") : NULL;
+    int cocreated = 0;
+    if (co_init) cocreated = (co_init(NULL, 2 /*APARTMENTTHREADED*/) >= 0) ? 1 : 0;
+
+    unsigned short* start_w = still_wide(start_url ? start_url : "");
+    g_wv2_poll_url_w = still_wide(poll_url ? poll_url : "");
+    g_wv2_start_url_w = start_w;
+    if (!start_w || !g_wv2_poll_url_w) {
+        free(start_w);
+        g_wv2_start_url_w = NULL;
+        snprintf(g_wv2_error, sizeof(g_wv2_error), "out of memory");
+        if (cocreated && co_uninit) co_uninit();
+        return 3;
+    }
+
+    gui_register_class();
+    gui_enable_dpi_awareness();
+
+    WNDCLASSEXA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = wv2_login_proc;
+    wc.hCursor = LoadCursor(NULL, (LPCSTR)IDC_ARROW);
+    wc.hbrBackground = CreateSolidBrush(RGB(26, 26, 26));
+    wc.lpszClassName = "StillWV2Login";
+    wc.hInstance = GetModuleHandleA(NULL);
+    RegisterClassExA(&wc);
+
+    UINT sdpi = (UINT)still_gui_system_dpi();
+    double scale = (double)sdpi / 96.0;
+    int cw = (int)(480 * scale);
+    int ch = (int)(640 * scale);
+    RECT r;
+    r.left = 0; r.top = 0; r.right = cw; r.bottom = ch;
+    AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+    RECT wa;
+    wa.left = 0; wa.top = 0; wa.right = 1280; wa.bottom = 800;
+    SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0);
+    int x = wa.left + (((wa.right - wa.left) - (r.right - r.left)) / 2);
+    int y = wa.top + (((wa.bottom - wa.top) - (r.bottom - r.top)) / 2);
+
+    HWND hwnd = CreateWindowExA(0, "StillWV2Login", "Wingram - Sign in to Instagram",
+                                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                                x, y, r.right - r.left, r.bottom - r.top,
+                                NULL, NULL, GetModuleHandleA(NULL), NULL);
+    if (!hwnd) {
+        free(start_w);
+        free((void*)g_wv2_poll_url_w);
+        g_wv2_poll_url_w = NULL;
+        snprintf(g_wv2_error, sizeof(g_wv2_error), "could not create the login window");
+        if (cocreated && co_uninit) co_uninit();
+        return 3;
+    }
+    g_wv2_hwnd = hwnd;
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
+    UpdateWindow(hwnd);
+
+    /* per-user data folder so repeated logins keep the session */
+    char udf[1024];
+    udf[0] = 0;
+    DWORD un = GetEnvironmentVariableA("LOCALAPPDATA", udf, (DWORD)sizeof(udf) - 1);
+    if (un > 0 && un < sizeof(udf) - 32) {
+        strncat(udf, "\\Wingram\\WebView2", sizeof(udf) - strlen(udf) - 1);
+    } else {
+        snprintf(udf, sizeof(udf), "%s", "WingramWebView2Data");
+    }
+    unsigned short* udf_w = still_wide(udf);
+    if (!udf_w) udf_w = still_wide("");
+    long hr = create_env(NULL, (const unsigned short*)udf_w, NULL, (void*)&g_wv2_env_handler);
+    free(udf_w);
+    if (hr != 0) {
+        snprintf(g_wv2_error, sizeof(g_wv2_error),
+                 "could not start the webview environment (0x%08lx)", (unsigned long)hr);
+        g_wv2_status = 3;
+    }
+
+    MSG msg;
+    while (g_wv2_status == 0 && GetMessageA(&msg, NULL, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessageA(&msg);
+    }
+
+    /* cleanup */
+    if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
+    if (g_wv2_pending_cm) {
+        wv2_release(g_wv2_pending_cm);
+        g_wv2_pending_cm = NULL;
+    }
+    if (g_wv2_ctrl_obj) {
+        WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
+        if (close_fn) close_fn(g_wv2_ctrl_obj);
+    }
+    if (g_wv2_web_obj) wv2_release(g_wv2_web_obj);
+    if (g_wv2_ctrl_obj) wv2_release(g_wv2_ctrl_obj);
+    if (g_wv2_env_obj) wv2_release(g_wv2_env_obj);
+    if (IsWindow(g_wv2_hwnd)) DestroyWindow(g_wv2_hwnd);
+    g_wv2_hwnd = NULL;
+    free(start_w);
+    g_wv2_start_url_w = NULL;
+    free((void*)g_wv2_poll_url_w);
+    g_wv2_poll_url_w = NULL;
+    if (cocreated && co_uninit) co_uninit();
+    if (ole) FreeLibrary(ole);
+
+    int result = g_wv2_status;
+    if (result == 0) result = 2;
+    return (int64_t)result;
+}
+
 #else /* !_WIN32: graceful no-op backends so the same program typechecks and runs everywhere */
 
 static char* still_dup_cstr(const char* s) {
@@ -3048,7 +3651,42 @@ void still_media_free(int64_t img) { (void)img; }
 int64_t still_media_width(int64_t img) { (void)img; return 0; }
 int64_t still_media_height(int64_t img) { (void)img; return 0; }
 
+
+int64_t still_net_save_body(int64_t id, const char* path) { (void)id; (void)path; return 0; }
+
+int64_t still_webview_available(void) { return 0; }
+const char* still_webview_runtime_version(void) { return ""; }
+const char* still_webview_last_error(void) { return "the webview backend requires Windows"; }
+int64_t still_webview_login(const char* start_url, const char* poll_url) {
+    (void)start_url; (void)poll_url;
+    return 3;
+}
+const char* still_webview_cookie(const char* name) { (void)name; return ""; }
+
+int64_t still_gui_dpi(int64_t handle) { (void)handle; return 96; }
+int64_t still_gui_system_dpi(void) { return 96; }
+
 #endif /* _WIN32 */
+
+/* Console re-attach: compiled programs default to the Windows subsystem
+   (no terminal window behind the GUI), but CI and users pass flags like
+   --selftest — re-attach to the parent console so print output is visible. */
+void still_cli_console_init(int argc, char** argv) {
+#ifdef _WIN32
+    int want = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] && argv[i][0] == '-' && argv[i][1] == '-') { want = 1; break; }
+    }
+    if (!want) return;
+    typedef int (__stdcall *AttachFn)(unsigned long);
+    AttachFn attach = (AttachFn)GetProcAddress(GetModuleHandleA("kernel32.dll"), "AttachConsole");
+    if (!attach || !attach((unsigned long)0xFFFFFFFFUL /*ATTACH_PARENT_PROCESS*/)) return;
+    FILE* f1 = freopen("CONOUT$", "w", stdout);
+    FILE* f2 = freopen("CONOUT$", "w", stderr);
+    FILE* f3 = freopen("CONIN$", "r", stdin);
+    (void)f1; (void)f2; (void)f3;
+#endif
+}
 
 /* ---------------------------------------------------------------- filesystem helpers (v0.6.1) */
 /* Directory listing and existence probe — universal, no platform backend

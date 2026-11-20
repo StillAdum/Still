@@ -535,6 +535,7 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
 int64_t still_net_status(int64_t id);
 const char* still_net_header(int64_t id, const char* name);
 const char* still_net_body(int64_t id);
+int64_t still_net_save_body(int64_t id, const char* path);
 void still_net_free(int64_t id);
 
 /* gui: Win32 window + GDI immediate-mode rendering (Windows; no-op elsewhere).
@@ -568,6 +569,22 @@ void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, d
 void still_gui_clip_push(int64_t handle, double x, double y, double w, double h);
 void still_gui_clip_pop(int64_t handle);
 void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, double w, double h);
+int64_t still_gui_dpi(int64_t handle);
+int64_t still_gui_system_dpi(void);
+
+/* webview: embedded Edge (WebView2) browser for OAuth-style in-app logins.
+   still_webview_login opens a real browser window and polls cookies until
+   they appear; read captured values with still_webview_cookie(name).
+   Requires WebView2Loader.dll next to the exe + the WebView2 runtime. */
+int64_t still_webview_available(void);
+const char* still_webview_runtime_version(void);
+const char* still_webview_last_error(void);
+int64_t still_webview_login(const char* start_url, const char* poll_url);
+const char* still_webview_cookie(const char* name);
+
+/* attach the parent console when the program is run with --flags (CI/debug);
+   no-op otherwise so GUI builds never open a terminal window */
+void still_cli_console_init(int argc, char** argv);
 
 /* audio: WAV playback + melody synthesis via winmm (Windows; no-op elsewhere) */
 int64_t still_audio_available(void);

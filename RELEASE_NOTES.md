@@ -1,3 +1,31 @@
+# Still v0.6.5 — real web logins (WebView2), DPI-aware windows, no terminal flash
+
+All requested by Wingram v0.2: a PC Instagram client that has to actually
+log in, scale properly, and behave like a desktop app.
+
+- **webview module (new): embedded Edge login windows.** `still_webview_login`
+  opens a real WebView2 browser (2FA, checkpoints and "remember me" all
+  work), polls the site's cookies in the background and closes itself as
+  soon as they appear; the app reads captured values with
+  `webview.cookie(name)`. Everything loads dynamically — WebView2Loader.dll
+  (ships beside the exe) and ole32 — and WebView2's COM vtables are invoked
+  by slot index, so no SDK headers are needed. Other platforms stub out.
+- **Windows subsystem builds.** `still build` now links `-subsystem windows`
+  (tcc), `/SUBSYSTEM:WINDOWS` (MSVC) or `-mwindows` (gcc/clang): launching a
+  GUI app no longer opens a terminal window behind it. The runtime
+  re-attaches the parent console when a program is invoked with `--flags`
+  (like `--selftest`), so CI output is unaffected.
+- **Per-monitor-v2 DPI awareness.** Windows are resizable/maximizable again
+  (full WS_OVERLAPPEDWINDOW — the old style deliberately stripped
+  WS_THICKFRAME | WS_MAXIMIZEBOX), keep a sane minimum size, track
+  WM_DPICHANGED across monitors, and expose `gui.dpi(win)` /
+  `gui.system_dpi()` so apps can scale their UI.
+- **Binary-safe downloads.** `net.download_to(url, headers, path)` saves a
+  response body byte-for-byte to disk (images, audio) via the new
+  `still_net_save_body` runtime helper — bodies no longer have to survive a
+  round-trip through a NUL-terminated string.
+- conformance: 68/68 green on Linux and Windows.
+
 # Still v0.6.4 — three code-generation fixes found by Wingram's GUI
 
 Wingram's release exe opened a white window and crashed instantly on first

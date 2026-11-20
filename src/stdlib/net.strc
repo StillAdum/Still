@@ -15,6 +15,7 @@ extern "C":
     func still_net_status(id: int) -> int
     func still_net_header(id: int, name: str) -> str
     func still_net_body(id: int) -> str
+    func still_net_save_body(id: int, path: str) -> int
     func still_net_free(id: int)
 
 # An HTTP response. ok is true only when a complete response arrived;
@@ -46,6 +47,20 @@ func request(method: str, url: str, headers: str = "", body: str = "", timeout_m
 
 func get(url: str, headers: str = "", timeout_ms: int = 20000) -> Response:
     return request("GET", url, headers, "", timeout_ms)
+
+# Download a URL straight to a file, byte-for-byte (binary safe: images,
+# audio). Returns (ok, http_status). Never routes the bytes through a str,
+# so NUL bytes and other binary content survive.
+func download_to(url: str, headers: str, path: str, timeout_ms: int = 20000) -> (bool, int):
+    rid = still_net_request("GET", url, headers, "", timeout_ms)
+    if rid < 0:
+        return (false, 0)
+    st = still_net_status(rid)
+    saved = still_net_save_body(rid, path) == 1
+    still_net_free(rid)
+    if st == 0:
+        return (false, 0)
+    return (saved, st)
 
 func post(url: str, body: str, headers: str = "Content-Type: application/x-www-form-urlencoded", timeout_ms: int = 20000) -> Response:
     return request("POST", url, headers, body, timeout_ms)

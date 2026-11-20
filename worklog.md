@@ -295,3 +295,10 @@ cargo test --release
   pressure). Conformance green after the fix.
 - examples: json_tour (portable), net_demo, audio_demo (graceful skip),
   gui_demo, media_demo (STILL_RUN_GUI_DEMO guard keeps CI headless-safe).
+
+## 2026-11-21 — v0.6.5 (Wingram unblock)
+- webview backend (WebView2 COM by slot index, login dialog + cookie polling)
+- windows-subsystem linking + --flag console re-attach
+- per-monitor-v2 DPI, resizable/maximizable windows, gui.dpi/system_dpi
+- net.download_to binary file downloads
+- conformance 68/68

@@ -174,7 +174,10 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
                 line.push_str(" /Od /Zi /DSTIL_DEBUG");
             }
             // GUI-capable by default, same as the tcc/gcc branches.
-            line.push_str(" /link user32.lib gdi32.lib");
+            // Windows subsystem keeps a console window from appearing when
+            // the compiled program is launched (output still works for
+            // console use because still_cli_console_init attaches one).
+            line.push_str(" /link user32.lib gdi32.lib /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup");
             line.push_str("\r\n");
             std::fs::write(&bat, line).map_err(|e| format!("failed to write build script: {}", e))?;
             Command::new("cmd").args(["/C", &bat.display().to_string()]).output()
@@ -191,7 +194,8 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
             } else {
                 cmd.arg("/Od").arg("/Zi").arg("/DSTIL_DEBUG");
             }
-            cmd.arg("/link").arg("user32.lib").arg("gdi32.lib");
+            cmd.arg("/link").arg("user32.lib").arg("gdi32.lib")
+                .arg("/SUBSYSTEM:WINDOWS").arg("/ENTRY:mainCRTStartup");
             cmd.current_dir(include_dir).output()
         };
         let out_res = out_res.map_err(|e| format!("failed to run cl: {}", e))?;
@@ -217,6 +221,10 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
             // window/input programs work out of the box (user32/gdi32 are
             // in every tcc distribution's import set; linking them into
             // console programs costs nothing).
+            // Windows subsystem: no terminal window behind GUI apps. The
+            // runtime re-attaches a console on demand for flag runs like
+            // --selftest (see still_cli_console_init).
+            cmd.arg("-subsystem").arg("windows");
             cmd.arg("-luser32").arg("-lgdi32");
         } else {
             cmd.arg("-lm");
@@ -243,8 +251,13 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
     }
     cmd.arg(c_file).arg(rt_c).arg("-o").arg(&out_abs);
     if cfg!(windows) {
-        // Same rationale as the tcc branch: GUI-capable by default.
-        cmd.arg("-luser32").arg("-lgdi32");
+        // Same rationale as the tcc branch: GUI-capable by default, windows
+        // subsystem so double-clicking the exe does not open a terminal.
+        if is_zig(&tc.program) {
+            cmd.arg("-luser32").arg("-lgdi32").arg("-mwindows");
+        } else {
+            cmd.arg("-mwindows").arg("-luser32").arg("-lgdi32");
+        }
     } else {
         cmd.arg("-lm").arg("-flto");
     }

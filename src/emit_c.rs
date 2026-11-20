@@ -289,7 +289,7 @@ impl Emitter {
         let ret_c = if name == "main" { "int".to_string() } else { ret_c };
         self.body.push_str(&format!("{}{} {}({}) {{\n", vis, ret_c, name, pl));
         if name == "main" {
-            self.body.push_str("    still_args_init(argc, argv);\n__MODULE_INITS__\n");
+            self.body.push_str("    still_cli_console_init(argc, argv);\n    still_args_init(argc, argv);\n__MODULE_INITS__\n");
         }
         let n_params = params.len();
         self.emit_block(body);
