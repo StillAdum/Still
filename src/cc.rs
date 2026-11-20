@@ -146,6 +146,13 @@ fn is_tcc(p: &Path) -> bool {
     p.file_name().map(|f| f == "tcc" || f == "tcc.exe").unwrap_or(false)
 }
 
+fn is_clang(p: &Path) -> bool {
+    p.file_name().map(|f| {
+        let n = f.to_string_lossy().to_lowercase();
+        n.starts_with("clang") || n == "cc" && std::env::var("STILL_CC_HINT").map(|h| h.contains("clang")).unwrap_or(false)
+    }).unwrap_or(false)
+}
+
 fn is_zig(p: &Path) -> bool {
     p.file_name().map(|f| f == "zig" || f == "zig.exe").unwrap_or(false)
 }
@@ -251,13 +258,15 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
     }
     cmd.arg(c_file).arg(rt_c).arg("-o").arg(&out_abs);
     if cfg!(windows) {
-        // Same rationale as the tcc branch: GUI-capable by default, windows
-        // subsystem so double-clicking the exe does not open a terminal.
-        if is_zig(&tc.program) {
-            cmd.arg("-luser32").arg("-lgdi32").arg("-mwindows");
-        } else {
-            cmd.arg("-mwindows").arg("-luser32").arg("-lgdi32");
+        // Same rationale as the tcc branch: GUI-capable by default.
+        // -mwindows (windows subsystem, no terminal behind GUI apps) works
+        // for mingw-gcc and zig cc; clang targeting MSVC rejects it, so
+        // clang builds stay console-subsystem (tcc is the primary path).
+        let clang = !is_zig(&tc.program) && is_clang(&tc.program);
+        if !clang {
+            cmd.arg("-mwindows");
         }
+        cmd.arg("-luser32").arg("-lgdi32");
     } else {
         cmd.arg("-lm").arg("-flto");
     }

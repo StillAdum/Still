@@ -1,3 +1,12 @@
+# Still v0.6.8 — clang-MSVC compat for windows-subsystem linking
+
+- v0.6.5 added `-mwindows` to the generic C compiler branch; clang targeting
+  MSVC (the compiler on PATH of GitHub windows runners) rejects that flag,
+  which failed the whole conformance suite. Clang builds now stay
+  console-subsystem; gcc/zig cc keep `-mwindows`, tcc keeps `-subsystem
+  windows` as the primary Wingram path.
+- conformance 68/68.
+
 # Still v0.6.7 — cache the WebView2 availability probe
 
 - still_webview_available() now probes WebView2 once and caches the result

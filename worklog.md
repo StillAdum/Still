@@ -308,3 +308,6 @@ cargo test --release
 
 ## 2026-11-21 — v0.6.7
 - cache still_webview_available probe
+
+## 2026-11-21 — v0.6.8
+- clang-MSVC: no -mwindows (was breaking the release conformance run)
