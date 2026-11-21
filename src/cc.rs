@@ -253,12 +253,10 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
             // Link the Windows GUI libraries by default so `extern "C"`
             // window/input programs work out of the box (user32/gdi32 are
             // in every tcc distribution's import set; linking them into
-            // console programs costs nothing).
-            // Windows subsystem (tcc syntax is -subsystem=windows): no
-            // terminal window behind GUI apps. The runtime re-attaches a
-            // console on demand for flag runs like --selftest (see
-            // still_cli_console_init).
-            cmd.arg("-subsystem=windows");
+            // console programs costs nothing). The subsystem itself is
+            // patched into the PE header after the link (see
+            // pe_force_gui_subsystem) instead of relying on a linker flag —
+            // tcc versions differ on whether -Wl,-subsystem= is accepted.
             cmd.arg("-luser32").arg("-lgdi32");
         } else {
             cmd.arg("-lm");
@@ -267,6 +265,9 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
         if !out_res.status.success() {
             let stderr = String::from_utf8_lossy(&out_res.stderr);
             return Err(format!("C compilation with TinyCC failed:\n{}", stderr));
+        }
+        if cfg!(windows) {
+            pe_force_gui_subsystem(&out_abs)?;
         }
         return Ok(());
     }
@@ -308,6 +309,43 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
     if !out_res.status.success() {
         let stderr = String::from_utf8_lossy(&out_res.stderr);
         return Err(format!("C compilation failed:\n{}", stderr));
+    }
+    if cfg!(windows) {
+        pe_force_gui_subsystem(&out_abs)?;
+    }
+    Ok(())
+}
+
+/* Set the PE OptionalHeader.Subsystem field to 2 (GUI) in place — the
+   same edit `editbin /SUBSYSTEM:WINDOWS` makes. Belt-and-suspenders on top
+   of the compiler flags: whatever the backend produced, a Still program
+   never drags a console window along (the runtime re-attaches one on
+   demand for --selftest style runs). No-op when the file is not a PE. */
+fn pe_force_gui_subsystem(exe: &Path) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut f = std::fs::OpenOptions::new().read(true).write(true)
+        .open(exe).map_err(|e| format!("cannot open {} to set the PE subsystem: {}", exe.display(), e))?;
+    let mut dos = [0u8; 2];
+    if f.read_exact(&mut dos).is_err() || &dos != b"MZ" { return Ok(()); }
+    f.seek(SeekFrom::Start(0x3C)).map_err(|e| e.to_string())?;
+    let mut off = [0u8; 4];
+    if f.read_exact(&mut off).is_err() { return Ok(()); }
+    let pe_off = u32::from_le_bytes(off) as u64;
+    if pe_off == 0 || pe_off > (1 << 20) { return Ok(()); }
+    f.seek(SeekFrom::Start(pe_off)).map_err(|e| e.to_string())?;
+    let mut sig = [0u8; 4];
+    if f.read_exact(&mut sig).is_err() || &sig != b"PE\0\0" { return Ok(()); }
+    // OptionalHeader starts at pe_off + 24; Subsystem lives at +68 for both
+    // PE32 and PE32+ (both use the same offset up to Subsystem).
+    let sub_off = pe_off + 24 + 68;
+    f.seek(SeekFrom::Start(sub_off)).map_err(|e| e.to_string())?;
+    let mut sub = [0u8; 2];
+    if f.read_exact(&mut sub).is_err() { return Ok(()); }
+    let current = u16::from_le_bytes(sub);
+    if current != 2 {
+        f.seek(SeekFrom::Start(sub_off)).map_err(|e| e.to_string())?;
+        f.write_all(&2u16.to_le_bytes())
+            .map_err(|e| format!("could not set the PE subsystem field: {}", e))?;
     }
     Ok(())
 }
@@ -358,7 +396,7 @@ pub fn setup_cc() -> Result<PathBuf, String> {
         // mirrors are tried as fallbacks. v0.4.0 carries the tcc asset
         // (v0.4.1+ dropped it, so try both release tags).
         let urls = [
-            "https://github.com/StillAdum/Still/releases/download/v0.6.10/tcc-win64.zip",
+            "https://github.com/StillAdum/Still/releases/download/v0.6.11/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.0/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.1/tcc-win64.zip",
         ];
@@ -425,4 +463,45 @@ pub fn tmp_build_dir(main: &Path) -> PathBuf {
     d.push(format!("still_build_{}_{}", stem, h.finish()));
     let _ = std::fs::create_dir_all(&d);
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /* The PE subsystem patcher must set field 68 of the optional header to
+       2 (GUI) and leave everything else untouched. */
+    #[test]
+    fn pe_patch_sets_gui_subsystem() {
+        let dir = std::env::temp_dir().join("still_pe_patch_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let exe = dir.join("fake.exe");
+        // Minimal PE: DOS header (e_lfanew at 0x3C -> 0x80), PE sig,
+        // 24-byte file header, optional header with Subsystem=3 at +68.
+        let mut buf = vec![0u8; 0x100];
+        buf[0] = b'M';
+        buf[1] = b'Z';
+        buf[0x3C..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        buf[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let sub_off = 0x80 + 24 + 68;
+        buf[sub_off..sub_off + 2].copy_from_slice(&3u16.to_le_bytes());
+        std::fs::write(&exe, &buf).unwrap();
+
+        pe_force_gui_subsystem(&exe).unwrap();
+
+        let patched = std::fs::read(&exe).unwrap();
+        let sub = u16::from_le_bytes([patched[sub_off], patched[sub_off + 1]]);
+        assert_eq!(sub, 2, "subsystem must become 2 (GUI)");
+        assert_eq!(&patched[0x80..0x84], b"PE\0\0", "rest of the header untouched");
+
+        // idempotent
+        pe_force_gui_subsystem(&exe).unwrap();
+        let patched2 = std::fs::read(&exe).unwrap();
+        assert_eq!(u16::from_le_bytes([patched2[sub_off], patched2[sub_off + 1]]), 2);
+
+        // non-PE files pass through silently
+        let txt = dir.join("notape.txt");
+        std::fs::write(&txt, b"hello").unwrap();
+        assert!(pe_force_gui_subsystem(&txt).is_ok());
+    }
 }
