@@ -2342,10 +2342,10 @@ typedef struct {
     int w, h;
     int open;
     int bg;
-    int mouse_x, mouse_y;
+    int mouse_x, mouse_y;   /* physical client pixels */
     int ldown;
     int click_edge;
-    int wheel;
+    int wheel;              /* physical wheel units */
     char input[4096];
     int input_len;
     unsigned char keys[256];
@@ -2354,6 +2354,7 @@ typedef struct {
     StilFontSlot fonts[STIL_GUI_FONT_CACHE];
     int font_count;
     int dpi;
+    double scale;           /* logical->physical factor (dpi/96), 1.0 default */
 } StilWindow;
 
 static StilWindow g_wins[STIL_GUI_MAX];
@@ -2505,6 +2506,7 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
     memset(win, 0, sizeof(StilWindow));
     win->bg = 0x101418;
     win->open = 1;
+    win->scale = 1.0;
 
     const char* t = (title && title[0]) ? title : "Still";
     RECT r = {0, 0, (LONG)w, (LONG)h};
@@ -2512,10 +2514,14 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
     int ww = (int)(r.right - r.left);
     int wh = (int)(r.bottom - r.top);
 
-    HWND hwnd = CreateWindowExA(0, "StillWindow", t,
+    /* wide-string creation so UTF-8 titles (em dashes, accents, CJK)
+       render correctly in the title bar */
+    wchar_t* wt = still_wide(t);
+    HWND hwnd = CreateWindowExW(0, L"StillWindow", wt ? wt : L"Still",
                                 WS_OVERLAPPEDWINDOW,
                                 CW_USEDEFAULT, CW_USEDEFAULT, ww, wh,
                                 NULL, NULL, GetModuleHandleA(NULL), NULL);
+    free(wt);
     if (!hwnd) {
         win->open = 0;
         return 0;
@@ -2527,6 +2533,19 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
     return (int64_t)(uintptr_t)hwnd;
+}
+
+/* Set the logical->physical scale for a window. Programs draw in logical
+   96-DPI pixels (like a web page's CSS pixels); the runtime multiplies
+   every coordinate, size, radius and font size by this factor and converts
+   mouse/wheel input back to logical units. Set it each frame from
+   dpi/96 to follow monitor changes. */
+void still_gui_set_scale(int64_t handle, double scale) {
+    StilWindow* w = gui_win(handle);
+    if (!w) return;
+    if (scale < 0.25) scale = 0.25;
+    if (scale > 8.0) scale = 8.0;
+    w->scale = scale;
 }
 
 int64_t still_gui_window_open(int64_t handle) {
@@ -2547,7 +2566,11 @@ void still_gui_close_window(int64_t handle) {
 void still_gui_set_title(int64_t handle, const char* title) {
     StilWindow* w = gui_win(handle);
     if (!w || !w->hwnd) return;
-    SetWindowTextA(w->hwnd, title ? title : "");
+    wchar_t* wt = still_wide(title ? title : "");
+    if (wt) {
+        SetWindowTextW(w->hwnd, wt);
+        free(wt);
+    }
 }
 
 void still_gui_set_bg(int64_t handle, int64_t rgb) {
@@ -2651,17 +2674,20 @@ void still_gui_end_frame(int64_t handle) {
 
 int64_t still_gui_width(int64_t handle) {
     StilWindow* w = gui_win(handle);
-    return w ? w->w : 0;
+    if (!w) return 0;
+    return (int64_t)((double)w->w / w->scale);
 }
 
 int64_t still_gui_height(int64_t handle) {
     StilWindow* w = gui_win(handle);
-    return w ? w->h : 0;
+    if (!w) return 0;
+    return (int64_t)((double)w->h / w->scale);
 }
 
 int64_t still_gui_mouse_x(int64_t handle) {
     StilWindow* w = gui_win(handle);
-    return w ? w->mouse_x : -1;
+    if (!w) return -1;
+    return (int64_t)((double)w->mouse_x / w->scale);
 }
 
 int64_t still_gui_dpi(int64_t handle) {
@@ -2685,7 +2711,8 @@ int64_t still_gui_system_dpi(void) {
 
 int64_t still_gui_mouse_y(int64_t handle) {
     StilWindow* w = gui_win(handle);
-    return w ? w->mouse_y : -1;
+    if (!w) return -1;
+    return (int64_t)((double)w->mouse_y / w->scale);
 }
 
 int64_t still_gui_mouse_down(int64_t handle) {
@@ -2700,7 +2727,8 @@ int64_t still_gui_mouse_clicked(int64_t handle) {
 
 int64_t still_gui_wheel_delta(int64_t handle) {
     StilWindow* w = gui_win(handle);
-    return w ? w->wheel : 0;
+    if (!w) return 0;
+    return (int64_t)((double)w->wheel / w->scale);
 }
 
 const char* still_gui_text_input(int64_t handle) {
@@ -2744,12 +2772,13 @@ static HFONT gui_font_lookup(StilWindow* w, double size, int weight) {
 void still_gui_text(int64_t handle, double x, double y, const char* text, int64_t rgb, double size) {
     StilWindow* w = gui_win(handle);
     if (!w || !w->mem || !text || !text[0]) return;
-    HFONT f = gui_font_lookup(w, size, FW_NORMAL);
+    double sc = w->scale;
+    HFONT f = gui_font_lookup(w, size * sc, FW_NORMAL);
     if (f) SelectObject(w->mem, f);
     SetTextColor(w->mem, gui_rgb(rgb));
     wchar_t* wt = still_wide(text);
     if (wt) {
-        TextOutW(w->mem, (int)x, (int)y, wt, lstrlenW(wt));
+        TextOutW(w->mem, (int)(x * sc), (int)(y * sc), wt, lstrlenW(wt));
         free(wt);
     }
 }
@@ -2757,12 +2786,13 @@ void still_gui_text(int64_t handle, double x, double y, const char* text, int64_
 void still_gui_text_bold(int64_t handle, double x, double y, const char* text, int64_t rgb, double size) {
     StilWindow* w = gui_win(handle);
     if (!w || !w->mem || !text || !text[0]) return;
-    HFONT f = gui_font_lookup(w, size, FW_SEMIBOLD);
+    double sc = w->scale;
+    HFONT f = gui_font_lookup(w, size * sc, FW_SEMIBOLD);
     if (f) SelectObject(w->mem, f);
     SetTextColor(w->mem, gui_rgb(rgb));
     wchar_t* wt = still_wide(text);
     if (wt) {
-        TextOutW(w->mem, (int)x, (int)y, wt, lstrlenW(wt));
+        TextOutW(w->mem, (int)(x * sc), (int)(y * sc), wt, lstrlenW(wt));
         free(wt);
     }
 }
@@ -2770,22 +2800,24 @@ void still_gui_text_bold(int64_t handle, double x, double y, const char* text, i
 int64_t still_gui_text_width(int64_t handle, const char* text, double size) {
     StilWindow* w = gui_win(handle);
     if (!w || !w->mem || !text || !text[0]) return 0;
-    HFONT f = gui_font_lookup(w, size, FW_NORMAL);
+    double sc = w->scale;
+    HFONT f = gui_font_lookup(w, size * sc, FW_NORMAL);
     if (f) SelectObject(w->mem, f);
     wchar_t* wt = still_wide(text);
-    int width = 0;
+    double width = 0.0;
     if (wt) {
         SIZE sz;
-        if (GetTextExtentPoint32W(w->mem, wt, lstrlenW(wt), &sz)) width = sz.cx;
+        if (GetTextExtentPoint32W(w->mem, wt, lstrlenW(wt), &sz)) width = (double)sz.cx / sc;
         free(wt);
     }
-    return width;
+    return (int64_t)(width + 0.5);
 }
 
 void still_gui_fill_rect(int64_t handle, double x, double y, double w, double h, int64_t rgb) {
     StilWindow* win = gui_win(handle);
     if (!win || !win->mem) return;
-    RECT r = { (LONG)x, (LONG)y, (LONG)(x + w), (LONG)(y + h) };
+    double sc = win->scale;
+    RECT r = { (LONG)(x * sc), (LONG)(y * sc), (LONG)((x + w) * sc), (LONG)((y + h) * sc) };
     HBRUSH b = CreateSolidBrush(gui_rgb(rgb));
     FillRect(win->mem, &r, b);
     DeleteObject(b);
@@ -2794,6 +2826,8 @@ void still_gui_fill_rect(int64_t handle, double x, double y, double w, double h,
 void still_gui_fill_round(int64_t handle, double x, double y, double w, double h, double rad, int64_t rgb) {
     StilWindow* win = gui_win(handle);
     if (!win || !win->mem) return;
+    double sc = win->scale;
+    x *= sc; y *= sc; w *= sc; h *= sc; rad *= sc;
     if (rad < 1) rad = 1;
     if (rad * 2 > w) rad = w / 2;
     if (rad * 2 > h) rad = h / 2;
@@ -2811,6 +2845,8 @@ void still_gui_fill_round(int64_t handle, double x, double y, double w, double h
 void still_gui_fill_circle(int64_t handle, double cx, double cy, double rad, int64_t rgb) {
     StilWindow* win = gui_win(handle);
     if (!win || !win->mem) return;
+    double sc = win->scale;
+    cx *= sc; cy *= sc; rad *= sc;
     HBRUSH b = CreateSolidBrush(gui_rgb(rgb));
     HPEN pen = CreatePen(PS_NULL, 1, 0);
     HPEN old_pen = (HPEN)SelectObject(win->mem, pen);
@@ -2825,6 +2861,8 @@ void still_gui_fill_circle(int64_t handle, double cx, double cy, double rad, int
 void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, double width, int64_t rgb) {
     StilWindow* win = gui_win(handle);
     if (!win || !win->mem) return;
+    double sc = win->scale;
+    cx *= sc; cy *= sc; rad *= sc; width *= sc;
     HPEN pen = CreatePen(PS_SOLID, (int)(width < 1 ? 1 : width), gui_rgb(rgb));
     HPEN old_pen = (HPEN)SelectObject(win->mem, pen);
     HBRUSH old_brush = (HBRUSH)SelectObject(win->mem, GetStockObject(NULL_BRUSH));
@@ -2837,8 +2875,9 @@ void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, d
 void still_gui_clip_push(int64_t handle, double x, double y, double w, double h) {
     StilWindow* win = gui_win(handle);
     if (!win || !win->mem) return;
+    double sc = win->scale;
     SaveDC(win->mem);
-    IntersectClipRect(win->mem, (int)x, (int)y, (int)(x + w), (int)(y + h));
+    IntersectClipRect(win->mem, (int)(x * sc), (int)(y * sc), (int)((x + w) * sc), (int)((y + h) * sc));
 }
 
 void still_gui_clip_pop(int64_t handle) {
@@ -3046,12 +3085,159 @@ void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, doubl
     StilWindow* win = gui_win(handle);
     if (!win || !win->mem || !img) return;
     if (!still_media_available()) return;
+    double sc = win->scale;
     GpGraphics* g = NULL;
     if (p_GdipCreateFromHDC(win->mem, &g) != 0 || !g) return;
     if (p_GdipSetInterpolationMode) p_GdipSetInterpolationMode(g, 7 /* HighQualityBicubic */);
     if (p_GdipSetSmoothingMode) p_GdipSetSmoothingMode(g, 4 /* AntiAlias */);
-    p_GdipDrawImageRectI(g, (GpImage*)(uintptr_t)img, (int)x, (int)y, (int)w, (int)h);
+    p_GdipDrawImageRectI(g, (GpImage*)(uintptr_t)img,
+                         (int)(x * sc), (int)(y * sc), (int)(w * sc), (int)(h * sc));
     p_GdipDeleteGraphics(g);
+}
+
+/* ============================================================ video: MFPlay
+   Real video playback (MP4/H.264) via Media Foundation's MFPlay, loaded
+   dynamically from mf.dll. We create our own WS_CHILD window inside the
+   app window, hand it to MFPCreateMediaPlayer, and move/resize it with
+   SetWindowPos (the video fills that child window; MFPlay letterboxes to
+   keep the aspect ratio). Audio is handled by the pipeline itself.
+   Vtable slots counted from the Windows SDK mfplay.h declaration of
+   IMFPMediaPlayer (Play=3 Pause=4 SetPosition=7 GetState=13 Shutdown=38). */
+
+static void* g_mfp_player = NULL;   /* IMFPMediaPlayer* */
+static HMODULE g_mf_dll = NULL;
+static HWND g_video_child = NULL;
+static int g_mf_inited = 0;
+
+#define MFP_PLAY_SLOT 3
+#define MFP_PAUSE_SLOT 4
+#define MFP_SETPOSITION_SLOT 7
+#define MFP_GETSTATE_SLOT 13
+#define MFP_SHUTDOWN_SLOT 38
+
+/* MFP_POSITIONTYPE_100NS = {00000000-0000-0000-0000-000000000000} */
+static const unsigned char g_mfp_pos_guid[16] = {0};
+
+typedef long (__stdcall *MfpFn0)(void*);
+
+static void* mfp_slot(int idx) {
+    if (!g_mfp_player) return NULL;
+    void** vt = *(void***)g_mfp_player;
+    return vt ? vt[idx] : NULL;
+}
+
+int64_t still_media_video_available(void) {
+    if (g_mf_dll) return 1;
+    g_mf_dll = LoadLibraryA("mf.dll");
+    return g_mf_dll ? 1 : 0;
+}
+
+int64_t still_media_video_play(const char* path, int64_t hwnd) {
+    still_media_video_stop();
+    if (!path || !path[0] || !hwnd) return 0;
+    if (!still_media_video_available()) return 0;
+    if (!g_mf_inited) {
+        typedef long (__stdcall *MfStartupFn)(unsigned long, unsigned long);
+        HMODULE mfplat = LoadLibraryA("mfplat.dll");
+        if (mfplat) {
+            MfStartupFn startup = (MfStartupFn)GetProcAddress(mfplat, "MFStartup");
+            if (startup) startup(0x20070 /*MF_VERSION*/, 0);
+        }
+        g_mf_inited = 1;
+    }
+    typedef long (__stdcall *CreatePlayerFn)(const unsigned short*, int, void*, void*, void**, void**);
+    CreatePlayerFn create = (CreatePlayerFn)GetProcAddress((HMODULE)g_mf_dll, "MFPCreateMediaPlayer");
+    if (!create) return 0;
+
+    /* dedicated child window for the video, positioned by video_rect();
+       created hidden and shown once playback actually starts */
+    HWND child = CreateWindowExW(0, L"STATIC", L"", WS_CHILD,
+                                 0, 0, 16, 16, (HWND)(uintptr_t)hwnd, NULL,
+                                 GetModuleHandleA(NULL), NULL);
+    if (!child) return 0;
+
+    unsigned short* wpath = still_wide(path);
+    if (!wpath) { DestroyWindow(child); return 0; }
+    void* player = NULL;
+    long hr = create(wpath, 1 /*start playback immediately*/, 0,
+                     NULL /*no callback needed: state is polled via GetState*/,
+                     child, &player);
+    free(wpath);
+    if (hr != 0 || !player) {
+        DestroyWindow(child);
+        return 0;
+    }
+    ShowWindow(child, SW_SHOW);
+    g_video_child = child;
+    g_mfp_player = player;
+    return 1;
+}
+
+/* Position the video child window. Coordinates are LOGICAL gui pixels of
+   the given window; scaled to physical with the window's gui scale. */
+void still_media_video_rect(int64_t gui_handle, double x, double y, double w, double h) {
+    if (!g_video_child) return;
+    double sc = 1.0;
+    StilWindow* gw = gui_win(gui_handle);
+    if (gw) sc = gw->scale;
+    SetWindowPos(g_video_child, NULL, (int)(x * sc), (int)(y * sc),
+                 (int)(w * sc + 0.5), (int)(h * sc + 0.5),
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+}
+
+int64_t still_media_video_state(void) {
+    if (!g_mfp_player) return 0;
+    typedef long (__stdcall *MfpFnInt)(void*, int*);
+    MfpFnInt state_fn = (MfpFnInt)mfp_slot(MFP_GETSTATE_SLOT);
+    if (!state_fn) return 0;
+    int st = 0;
+    if (state_fn(g_mfp_player, &st) != 0) return 0;
+    /* MFP_MEDIAPLAYER_STATE: 0 empty 1 stopped 2 playing 3 paused 4 shutdown */
+    if (st == 2) return 1;
+    if (st == 3) return 2;
+    if (st == 1) return 3;
+    return 0;
+}
+
+void still_media_video_rewind(void) {
+    if (!g_mfp_player) return;
+    MfpFn0 play = (MfpFn0)mfp_slot(MFP_PLAY_SLOT);
+    typedef long (__stdcall *MfpFnPos)(void*, const void*, void*);
+    MfpFnPos setpos = (MfpFnPos)mfp_slot(MFP_SETPOSITION_SLOT);
+    if (setpos) {
+        /* PROPVARIANT for VT_I8 0ns: vt=20, quadpart at offset 8 */
+        unsigned char pv[32];
+        memset(pv, 0, sizeof(pv));
+        pv[0] = 20;
+        setpos(g_mfp_player, (const void*)g_mfp_pos_guid, (void*)pv);
+    }
+    if (play) play(g_mfp_player);
+}
+
+void still_media_video_pause(void) {
+    if (!g_mfp_player) return;
+    MfpFn0 pause = (MfpFn0)mfp_slot(MFP_PAUSE_SLOT);
+    if (pause) pause(g_mfp_player);
+}
+
+void still_media_video_resume(void) {
+    if (!g_mfp_player) return;
+    MfpFn0 play = (MfpFn0)mfp_slot(MFP_PLAY_SLOT);
+    if (play) play(g_mfp_player);
+}
+
+void still_media_video_stop(void) {
+    if (g_mfp_player) {
+        MfpFn0 shutdown_fn = (MfpFn0)mfp_slot(MFP_SHUTDOWN_SLOT);
+        if (shutdown_fn) shutdown_fn(g_mfp_player);
+        MfpFn0 release_fn = (MfpFn0)mfp_slot(2);
+        if (release_fn) release_fn(g_mfp_player);
+        g_mfp_player = NULL;
+    }
+    if (g_video_child) {
+        DestroyWindow(g_video_child);
+        g_video_child = NULL;
+    }
 }
 
 /* ============================================================ webview: WebView2 login dialog
@@ -3082,11 +3268,19 @@ static int g_wv2_cookie_count = 0;
 static void* g_wv2_env_obj = NULL;
 static void* g_wv2_ctrl_obj = NULL;
 static void* g_wv2_web_obj = NULL;
+static void* g_wv2_web2_obj = NULL;   /* ICoreWebView2_2 via QI (cookie manager lives here) */
 static void* g_wv2_pending_cm = NULL;
 static HWND g_wv2_hwnd = NULL;
 static int g_wv2_status = 0;   /* 0 running, 1 cookies captured, 2 user closed, 3 error */
 static unsigned short* g_wv2_poll_url_w = NULL;
 static unsigned short* g_wv2_start_url_w = NULL;
+static char g_wv2_wanted[64] = "sessionid";
+
+/* IID_ICoreWebView2_2 = {9E8F0CF8-E670-4B5E-B2BC-73E061E3184C} */
+static const unsigned char g_wv2_iid_web2[16] = {
+    0xF8, 0x0C, 0x8F, 0x9E, 0x70, 0xE6, 0x5E, 0x4B,
+    0xB2, 0xBC, 0x73, 0xE0, 0x61, 0xE3, 0x18, 0x4C
+};
 
 /* vtable slot indices (counted from WebView2.h interface declarations) */
 #define WV2_WEBVIEW_NAVIGATE 5
@@ -3223,17 +3417,19 @@ static void wv2_resize(void) {
 }
 
 static void wv2_poll_cookies(void) {
-    if (g_wv2_status != 0 || !g_wv2_web_obj) return;
+    if (g_wv2_status != 0 || !g_wv2_web2_obj) return;
     /* keep the cookie manager alive until its async result arrives:
        release the previous poll's manager only now */
     if (g_wv2_pending_cm) {
         wv2_release(g_wv2_pending_cm);
         g_wv2_pending_cm = NULL;
     }
-    WV2FnV get_cm = (WV2FnV)wv2_slot(g_wv2_web_obj, WV2_WEBVIEW2_GET_COOKIEMANAGER);
+    /* get_CookieManager is a member of ICoreWebView2_2; we hold a
+       QI-obtained web2 pointer, so the slot is guaranteed correct */
+    WV2FnV get_cm = (WV2FnV)wv2_slot(g_wv2_web2_obj, WV2_WEBVIEW2_GET_COOKIEMANAGER);
     if (!get_cm) return;
     void* cm = NULL;
-    if (get_cm(g_wv2_web_obj, &cm) != 0 || !cm) return;
+    if (get_cm(g_wv2_web2_obj, &cm) != 0 || !cm) return;
     WV2FnVP get_cookies = (WV2FnVP)wv2_slot(cm, WV2_CM_GET_COOKIES);
     if (get_cookies && g_wv2_poll_url_w) {
         get_cookies(cm, g_wv2_poll_url_w, (void*)&g_wv2_cookies_handler);
@@ -3278,7 +3474,7 @@ static long __stdcall wv2_cookies_invoke(void* self, long result, void* list) {
         }
     }
     wv2_release(list);
-    char* sid = wv2_get_cookie_value("sessionid");
+    char* sid = wv2_get_cookie_value(g_wv2_wanted);
     if (sid && sid[0] != 0) {
         g_wv2_status = 1;
         PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
@@ -3323,6 +3519,23 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
     if (get_web) get_web(ctrl, &g_wv2_web_obj);
     if (vis_fn) vis_fn(ctrl, 1);
     wv2_resize();
+    /* QueryInterface the web object for ICoreWebView2_2 explicitly — the
+       cookie manager call then goes through the right interface pointer
+       instead of assuming the appended-vtable layout of the base pointer. */
+    if (g_wv2_web_obj) {
+        WV2FnVP qi = (WV2FnVP)wv2_slot(g_wv2_web_obj, 0);
+        void* web2 = NULL;
+        if (qi && qi(g_wv2_web_obj, (const void*)g_wv2_iid_web2, &web2) == 0 && web2) {
+            g_wv2_web2_obj = web2;
+        } else {
+            /* older runtime without _2: cookies unavailable */
+            snprintf(g_wv2_error, sizeof(g_wv2_error),
+                     "this WebView2 runtime is too old for cookie capture");
+            g_wv2_status = 3;
+            if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+            return 0;
+        }
+    }
     if (g_wv2_web_obj && g_wv2_start_url_w) {
         WV2FnW nav = (WV2FnW)wv2_slot(g_wv2_web_obj, WV2_WEBVIEW_NAVIGATE);
         if (nav) nav(g_wv2_web_obj, g_wv2_start_url_w);
@@ -3438,16 +3651,20 @@ const char* still_webview_runtime_version(void) {
     return g_wv2_version;
 }
 
-/* Blocking: opens the login browser window and returns when the session
-   cookies are captured or the window is closed.
-   Returns 1 = cookies captured, 2 = window closed without login, 3 = error. */
-int64_t still_webview_login(const char* start_url, const char* poll_url) {
+/* Blocking: opens the login browser window and returns when the wanted
+   cookie is captured or the window is closed.
+   Returns 1 = cookie captured, 2 = window closed without login, 3 = error.
+   `wanted` names the cookie that ends the dialog (e.g. "sessionid"). */
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted) {
     g_wv2_error[0] = 0;
     g_wv2_cookie_count = 0;
     g_wv2_status = 0;
     g_wv2_env_obj = NULL;
     g_wv2_ctrl_obj = NULL;
     g_wv2_web_obj = NULL;
+    g_wv2_web2_obj = NULL;
+    snprintf(g_wv2_wanted, sizeof(g_wv2_wanted), "%s",
+             (wanted && wanted[0]) ? wanted : "sessionid");
     wv2_init_vtables();
     g_wv2_env_handler.vtbl = (void*)g_wv2_env_vt;
     g_wv2_ctrl_handler.vtbl = (void*)g_wv2_ctrl_vt;
@@ -3461,14 +3678,13 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
         return 3;
     }
 
-    /* COM init (apartment-threaded) for cookie objects */
+    /* COM init (apartment-threaded, kept for the life of the process: the
+       WebView2 host completes asynchronous work after this function returns,
+       so uninitializing COM here would race its teardown) */
     HMODULE ole = LoadLibraryA("ole32.dll");
     typedef long (__stdcall *CoInitFn)(void*, unsigned long);
-    typedef void (__stdcall *CoUninitFn)(void);
     CoInitFn co_init = ole ? (CoInitFn)GetProcAddress(ole, "CoInitializeEx") : NULL;
-    CoUninitFn co_uninit = ole ? (CoUninitFn)GetProcAddress(ole, "CoUninitialize") : NULL;
-    int cocreated = 0;
-    if (co_init) cocreated = (co_init(NULL, 2 /*APARTMENTTHREADED*/) >= 0) ? 1 : 0;
+    if (co_init) co_init(NULL, 2 /*APARTMENTTHREADED*/);
 
     unsigned short* start_w = still_wide(start_url ? start_url : "");
     g_wv2_poll_url_w = still_wide(poll_url ? poll_url : "");
@@ -3477,7 +3693,6 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
         free(start_w);
         g_wv2_start_url_w = NULL;
         snprintf(g_wv2_error, sizeof(g_wv2_error), "out of memory");
-        if (cocreated && co_uninit) co_uninit();
         return 3;
     }
 
@@ -3507,7 +3722,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
     int x = wa.left + (((wa.right - wa.left) - (r.right - r.left)) / 2);
     int y = wa.top + (((wa.bottom - wa.top) - (r.bottom - r.top)) / 2);
 
-    HWND hwnd = CreateWindowExA(0, "StillWV2Login", "Wingram - Sign in to Instagram",
+    HWND hwnd = CreateWindowExW(0, L"StillWV2Login", L"Wingram - Sign in to Instagram",
                                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                                 x, y, r.right - r.left, r.bottom - r.top,
                                 NULL, NULL, GetModuleHandleA(NULL), NULL);
@@ -3516,7 +3731,6 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
         free((void*)g_wv2_poll_url_w);
         g_wv2_poll_url_w = NULL;
         snprintf(g_wv2_error, sizeof(g_wv2_error), "could not create the login window");
-        if (cocreated && co_uninit) co_uninit();
         return 3;
     }
     g_wv2_hwnd = hwnd;
@@ -3549,7 +3763,9 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
         DispatchMessageA(&msg);
     }
 
-    /* cleanup */
+    /* cleanup. COM stays initialized and ole32 stays loaded: the WebView2
+       host may still deliver asynchronous completions (browser teardown)
+       after we return, and tearing COM down under it crashes the process. */
     if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
     if (g_wv2_pending_cm) {
         wv2_release(g_wv2_pending_cm);
@@ -3559,6 +3775,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
         WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
         if (close_fn) close_fn(g_wv2_ctrl_obj);
     }
+    if (g_wv2_web2_obj) wv2_release(g_wv2_web2_obj);
     if (g_wv2_web_obj) wv2_release(g_wv2_web_obj);
     if (g_wv2_ctrl_obj) wv2_release(g_wv2_ctrl_obj);
     if (g_wv2_env_obj) wv2_release(g_wv2_env_obj);
@@ -3568,8 +3785,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url) {
     g_wv2_start_url_w = NULL;
     free((void*)g_wv2_poll_url_w);
     g_wv2_poll_url_w = NULL;
-    if (cocreated && co_uninit) co_uninit();
-    if (ole) FreeLibrary(ole);
+    g_wv2_web2_obj = NULL;
 
     int result = g_wv2_status;
     if (result == 0) result = 2;
@@ -3671,14 +3887,29 @@ int64_t still_net_save_body(int64_t id, const char* path) { (void)id; (void)path
 int64_t still_webview_available(void) { return 0; }
 const char* still_webview_runtime_version(void) { return ""; }
 const char* still_webview_last_error(void) { return "the webview backend requires Windows"; }
-int64_t still_webview_login(const char* start_url, const char* poll_url) {
-    (void)start_url; (void)poll_url;
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted) {
+    (void)start_url; (void)poll_url; (void)wanted;
     return 3;
 }
 const char* still_webview_cookie(const char* name) { (void)name; return ""; }
 
 int64_t still_gui_dpi(int64_t handle) { (void)handle; return 96; }
 int64_t still_gui_system_dpi(void) { return 96; }
+void still_gui_set_scale(int64_t handle, double scale) { (void)handle; (void)scale; }
+
+int64_t still_media_video_available(void) { return 0; }
+int64_t still_media_video_play(const char* path, int64_t hwnd) {
+    (void)path; (void)hwnd;
+    return 0;
+}
+void still_media_video_rect(int64_t gui_handle, double x, double y, double w, double h) {
+    (void)gui_handle; (void)x; (void)y; (void)w; (void)h;
+}
+int64_t still_media_video_state(void) { return 0; }
+void still_media_video_rewind(void) {}
+void still_media_video_pause(void) {}
+void still_media_video_resume(void) {}
+void still_media_video_stop(void) {}
 
 #endif /* _WIN32 */
 
@@ -3699,8 +3930,66 @@ void still_cli_console_init(int argc, char** argv) {
     FILE* f2 = freopen("CONOUT$", "w", stderr);
     FILE* f3 = freopen("CONIN$", "r", stdin);
     (void)f1; (void)f2; (void)f3;
+#else
+    (void)argc; (void)argv;
 #endif
 }
+
+/* ------------------------------------------------------- crash logger
+   GUI apps die without a trace when they fault. This writes a small
+   wingram-crash.log next to the executable (code, address, module and a
+   raw return-address trail) so user reports pinpoint the faulting spot.
+   Safe on every platform: a no-op outside Windows. */
+#ifdef _WIN32
+static LONG __stdcall still_crash_filter(EXCEPTION_POINTERS* ep) {
+    char path[1024];
+    DWORD n = GetModuleFileNameA(NULL, path, (DWORD)sizeof(path) - 1);
+    if (n > 0 && n < sizeof(path)) {
+        path[n] = 0;
+        char* slash = strrchr(path, '\\');
+        if (slash) *(slash + 1) = 0;
+        strncat(path, "wingram-crash.log", sizeof(path) - strlen(path) - 1);
+        FILE* f = fopen(path, "a");
+        if (f) {
+            fprintf(f, "crash: exception 0x%08lX at %p\n",
+                    ep && ep->ExceptionRecord ? (unsigned long)ep->ExceptionRecord->ExceptionCode : 0UL,
+                    ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : NULL);
+            if (ep && ep->ContextRecord) {
+#if defined(_M_X64) || defined(__x86_64__)
+                fprintf(f, "regs: rip=%p rsp=%p\n",
+                        ep->ContextRecord->Rip, ep->ContextRecord->Rsp);
+#endif
+            }
+            void* frames[24];
+            USHORT count = CaptureStackBackTrace(0, 24, frames, NULL);
+            fprintf(f, "stack (%u frames):\n", (unsigned)count);
+            for (USHORT i = 0; i < count; i++) {
+                HMODULE m = NULL;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       (LPCSTR)frames[i], &m) && m) {
+                    char mname[256] = "?";
+                    GetModuleFileNameA(m, mname, sizeof(mname) - 1);
+                    const char* base = strrchr(mname, '\\');
+                    base = base ? base + 1 : mname;
+                    fprintf(f, "  %02u %p %s+0x%zX\n", (unsigned)i, frames[i], base,
+                            (size_t)((char*)frames[i] - (char*)m));
+                } else {
+                    fprintf(f, "  %02u %p\n", (unsigned)i, frames[i]);
+                }
+            }
+            fprintf(f, "version: still runtime crash logger\n\n");
+            fclose(f);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+void still_install_crash_logger(void) {
+    SetUnhandledExceptionFilter(still_crash_filter);
+}
+#else
+void still_install_crash_logger(void) {}
+#endif
 
 /* ---------------------------------------------------------------- filesystem helpers (v0.6.1) */
 /* Directory listing and existence probe — universal, no platform backend

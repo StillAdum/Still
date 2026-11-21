@@ -1,9 +1,17 @@
-# media — image loading via GDI+ (real since v0.6.0) + legacy capture stubs
+# media — image loading via GDI+ (real since v0.6.0) + video via MFPlay
 #
 # load() opens JPEG/PNG/GIF/BMP/ICO/TIFF files from disk and returns an opaque
 # image handle (0 on failure). Pass the handle to gui.draw_image to render it
 # inside a gui window. free() releases the handle when done. On other
 # platforms available() is false and load() returns 0.
+#
+# video_* plays real MP4/H.264 video with sound inside a gui window
+# (Media Foundation MFPlay on Windows; graceful no-op elsewhere):
+#   video_play(path, win)   start a local file (returns false when the
+#                           backend is missing — fall back to a poster)
+#   video_rect(win, x, y, w, h)  position it in LOGICAL gui coordinates
+#   video_state()           0 idle, 1 playing, 2 paused, 3 ended
+#   video_rewind / video_pause / video_resume / video_stop
 
 extern "C":
     func still_media_available() -> int
@@ -11,6 +19,14 @@ extern "C":
     func still_media_free(img: int)
     func still_media_width(img: int) -> int
     func still_media_height(img: int) -> int
+    func still_media_video_available() -> int
+    func still_media_video_play(path: str, hwnd: int) -> int
+    func still_media_video_rect(gui_handle: int, x: float, y: float, w: float, h: float)
+    func still_media_video_state() -> int
+    func still_media_video_rewind()
+    func still_media_video_pause()
+    func still_media_video_resume()
+    func still_media_video_stop()
 
 func available() -> bool:
     return still_media_available() == 1
@@ -26,6 +42,30 @@ func width(img: int) -> int:
 
 func height(img: int) -> int:
     return still_media_height(img)
+
+func video_available() -> bool:
+    return still_media_video_available() == 1
+
+func video_play(path: str, win: int) -> bool:
+    return still_media_video_play(path, win) == 1
+
+func video_rect(win: int, x: float, y: float, w: float, h: float):
+    still_media_video_rect(win, x, y, w, h)
+
+func video_state() -> int:
+    return still_media_video_state()
+
+func video_rewind():
+    still_media_video_rewind()
+
+func video_pause():
+    still_media_video_pause()
+
+func video_resume():
+    still_media_video_resume()
+
+func video_stop():
+    still_media_video_stop()
 
 # ---------------------------------------------------------------------------
 # Legacy capture stubs (kept for compatibility; these need real backend work

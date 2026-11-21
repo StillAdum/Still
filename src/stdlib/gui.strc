@@ -45,6 +45,7 @@ extern "C":
     func still_gui_draw_image(win: int, img: int, x: float, y: float, w: float, h: float)
     func still_gui_dpi(win: int) -> int
     func still_gui_system_dpi() -> int
+    func still_gui_set_scale(win: int, scale: float)
 
 func available() -> bool:
     return still_gui_available() == 1
@@ -138,6 +139,14 @@ func dpi(win: int) -> int:
 # DPI of the primary monitor, available before any window exists.
 func system_dpi() -> int:
     return still_gui_system_dpi()
+
+# Set the window's logical->physical scale (dpi/96). After this, ALL draw
+# coordinates/sizes/font sizes are logical 96-DPI pixels scaled up by the
+# runtime, and mouse/wheel input comes back in the same logical units —
+# write layout code once like a web page and it is crisp at any DPI.
+# Call it every frame: set_scale(win, float(dpi(win)) / 96.0).
+func set_scale(win: int, scale: float):
+    still_gui_set_scale(win, scale)
 
 # Virtual-key codes for key() / key_pressed()
 VK_BACK = 8

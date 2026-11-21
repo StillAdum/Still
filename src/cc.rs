@@ -153,6 +153,32 @@ fn is_clang(p: &Path) -> bool {
     }).unwrap_or(false)
 }
 
+/* Does this clang build target MSVC (link.exe / lld-link semantics) rather
+   than mingw (GNU ld semantics)? Decides how the windows subsystem is
+   requested. Reads `clang --version`, whose output contains the default
+   target triple, e.g. "Target: x86_64-pc-windows-msvc". */
+#[cfg(windows)]
+fn clang_targets_msvc(program: &Path) -> bool {
+    if let Ok(out) = Command::new(program).arg("--version").output() {
+        let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
+        if text.contains("windows-msvc") || text.contains("pc-windows-msvc") {
+            return true;
+        }
+        if text.contains("mingw") {
+            return false;
+        }
+        // Unknown triple: assume MSVC on Windows hosts (the LLVM.org builds
+        // default to the MSVC target when a Visual Studio is detected).
+        return text.contains("target:");
+    }
+    true
+}
+
+#[cfg(not(windows))]
+fn clang_targets_msvc(_program: &Path) -> bool {
+    false
+}
+
 fn is_zig(p: &Path) -> bool {
     p.file_name().map(|f| f == "zig" || f == "zig.exe").unwrap_or(false)
 }
@@ -260,10 +286,17 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
     if cfg!(windows) {
         // Same rationale as the tcc branch: GUI-capable by default.
         // -mwindows (windows subsystem, no terminal behind GUI apps) works
-        // for mingw-gcc and zig cc; clang targeting MSVC rejects it, so
-        // clang builds stay console-subsystem (tcc is the primary path).
-        let clang = !is_zig(&tc.program) && is_clang(&tc.program);
-        if !clang {
+        // for mingw-gcc and zig cc. clang targeting MSVC rejects -mwindows,
+        // so for the MSVC target we pass the linker options directly
+        // (/SUBSYSTEM:WINDOWS + /ENTRY:mainCRTStartup keeps main() working);
+        // mingw-target clang keeps using -mwindows.
+        if !is_zig(&tc.program) && is_clang(&tc.program) {
+            if clang_targets_msvc(&tc.program) {
+                cmd.arg("-Wl,/SUBSYSTEM:WINDOWS").arg("-Wl,/ENTRY:mainCRTStartup");
+            } else {
+                cmd.arg("-mwindows");
+            }
+        } else {
             cmd.arg("-mwindows");
         }
         cmd.arg("-luser32").arg("-lgdi32");
@@ -321,10 +354,12 @@ pub fn setup_cc() -> Result<PathBuf, String> {
             return Ok(target_tcc);
         }
         // Download portable TinyCC (~2MB): primary source is our release;
-        // mirrors are tried as fallbacks.
+        // mirrors are tried as fallbacks. v0.4.0 carries the tcc asset
+        // (v0.4.1+ dropped it, so try both release tags).
         let urls = [
+            "https://github.com/StillAdum/Still/releases/download/v0.6.9/tcc-win64.zip",
+            "https://github.com/StillAdum/Still/releases/download/v0.4.0/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.1/tcc-win64.zip",
-            "https://github.com/bained/C-Chads_tinycc-binary/raw/main/C-Chads_tinycc_0.9.28rc-binary.zip",
         ];
         let ps_cmd = format!(
             "$dest = '{}'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $zip = Join-Path $dest 'tcc.zip'; foreach ($u in {}) {{ Invoke-WebRequest -Uri $u -OutFile $zip -ErrorAction SilentlyContinue; if ((Test-Path $zip) -and ((Get-Item $zip).Length -gt 100000)) {{ Expand-Archive -Path $zip -DestinationPath $dest -Force; Remove-Item $zip; if (-not (Test-Path (Join-Path $dest 'tcc.exe'))) {{ $found = Get-ChildItem -Path $dest -Recurse -Filter 'tcc.exe' | Select-Object -First 1; if ($found) {{ $sub = Split-Path $found.FullName; Move-Item (Join-Path $sub '*') $dest -Force -ErrorAction SilentlyContinue }} }}; break }} }}",

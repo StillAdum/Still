@@ -571,20 +571,37 @@ void still_gui_clip_pop(int64_t handle);
 void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, double w, double h);
 int64_t still_gui_dpi(int64_t handle);
 int64_t still_gui_system_dpi(void);
+void still_gui_set_scale(int64_t handle, double scale);
 
 /* webview: embedded Edge (WebView2) browser for OAuth-style in-app logins.
    still_webview_login opens a real browser window and polls cookies until
-   they appear; read captured values with still_webview_cookie(name).
+   the wanted one appears; read captured values with still_webview_cookie().
    Requires WebView2Loader.dll next to the exe + the WebView2 runtime. */
 int64_t still_webview_available(void);
 const char* still_webview_runtime_version(void);
 const char* still_webview_last_error(void);
-int64_t still_webview_login(const char* start_url, const char* poll_url);
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted);
 const char* still_webview_cookie(const char* name);
+
+/* video playback via Media Foundation MFPlay (Windows; no-op elsewhere).
+   video_play starts a local file in a child video window of `hwnd`; the
+   rect is in the gui window's logical coordinates and re-applied on demand. */
+int64_t still_media_video_available(void);
+int64_t still_media_video_play(const char* path, int64_t hwnd);
+void still_media_video_rect(int64_t gui_handle, double x, double y, double w, double h);
+int64_t still_media_video_state(void);   /* 0 idle 1 playing 2 paused 3 ended 4 error */
+void still_media_video_rewind(void);
+void still_media_video_pause(void);
+void still_media_video_resume(void);
+void still_media_video_stop(void);
 
 /* attach the parent console when the program is run with --flags (CI/debug);
    no-op otherwise so GUI builds never open a terminal window */
 void still_cli_console_init(int argc, char** argv);
+
+/* install the unhandled-exception logger (writes wingram-crash.log next to
+   the exe with exception code + module-relative stack) — called by main() */
+void still_install_crash_logger(void);
 
 /* audio: WAV playback + melody synthesis via winmm (Windows; no-op elsewhere) */
 int64_t still_audio_available(void);
