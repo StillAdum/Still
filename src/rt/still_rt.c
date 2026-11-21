@@ -3325,6 +3325,14 @@ static void* wv2_slot(void* obj, int idx) {
     return vt[idx];
 }
 
+/* env-gated stage tracing (STILL_WV2_TRACE=1) for CI diagnosis, same
+   pattern as the net layer's STILL_NET_TRACE */
+static int g_wv2_trace = -1;
+static void wv2_trace(const char* stage) {
+    if (g_wv2_trace < 0) g_wv2_trace = (getenv("STILL_WV2_TRACE") != NULL) ? 1 : 0;
+    if (g_wv2_trace) fprintf(stderr, "still_webview: %s\n", stage);
+}
+
 static unsigned long wv2_release(void* obj) {
     WV2Fn0 f = (WV2Fn0)wv2_slot(obj, 2);
     return f ? f(obj) : 0;
@@ -3429,6 +3437,7 @@ static void wv2_poll_cookies(void) {
     if (g_wv2_deadline) {
         DWORD now = GetTickCount();
         if ((DWORD)(now - g_wv2_deadline) < 0x80000000UL) {
+            wv2_trace("deadline reached, closing");
             snprintf(g_wv2_error, sizeof(g_wv2_error), "timed out waiting for the cookie");
             g_wv2_status = 2;
             if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
@@ -3504,6 +3513,7 @@ static long __stdcall wv2_cookies_invoke(void* self, long result, void* list) {
 
 static long __stdcall wv2_env_invoke(void* self, long result, void* env) {
     (void)self;
+    wv2_trace("environment completion");
     if (result != 0 || !env) {
         snprintf(g_wv2_error, sizeof(g_wv2_error),
                  "webview environment failed (0x%08lx)", (unsigned long)result);
@@ -3525,6 +3535,7 @@ static long __stdcall wv2_env_invoke(void* self, long result, void* env) {
 
 static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
     (void)self;
+    wv2_trace("controller completion");
     if (result != 0 || !ctrl) {
         snprintf(g_wv2_error, sizeof(g_wv2_error),
                  "webview controller failed (0x%08lx)", (unsigned long)result);
@@ -3545,8 +3556,10 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
         void* web2 = NULL;
         typedef long (__stdcall *QiFn)(void*, const void*, void**);
         QiFn qi2 = (QiFn)wv2_slot(g_wv2_web_obj, 0);
+        wv2_trace("queryinterface ICoreWebView2_2");
         if (qi2 && qi2(g_wv2_web_obj, (const void*)g_wv2_iid_web2, &web2) == 0 && web2) {
             g_wv2_web2_obj = web2;
+            wv2_trace("QI ok");
         } else {
             /* older runtime without _2: cookies unavailable */
             snprintf(g_wv2_error, sizeof(g_wv2_error),
@@ -3804,10 +3817,12 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
        wingram right after the login window closed. So: Close, then PUMP
        the loop for a while so the teardown lands while everything is
        still alive, then release. */
+    wv2_trace("teardown begin");
     if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
     if (g_wv2_ctrl_obj) {
         WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
         if (close_fn) close_fn(g_wv2_ctrl_obj);
+        wv2_trace("controller closed, pumping");
         /* pump pending messages (browser teardown completions + any
            in-flight GetCookies) for up to ~1.5s; WM_QUIT was already
            consumed by the GetMessage loop so this terminates on its own */
@@ -3819,6 +3834,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
             }
             Sleep(25);
         }
+        wv2_trace("pump done");
     }
     /* release AFTER the pump so an in-flight GetCookies completion never
        sees a cookie manager we already freed */
@@ -3830,6 +3846,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     if (g_wv2_web_obj) wv2_release(g_wv2_web_obj);
     if (g_wv2_ctrl_obj) wv2_release(g_wv2_ctrl_obj);
     if (g_wv2_env_obj) wv2_release(g_wv2_env_obj);
+    wv2_trace("objects released");
     if (IsWindow(g_wv2_hwnd)) DestroyWindow(g_wv2_hwnd);
     g_wv2_hwnd = NULL;
     free(start_w);
@@ -3967,7 +3984,10 @@ void still_media_video_stop(void) {}
 
 /* Console re-attach: compiled programs default to the Windows subsystem
    (no terminal window behind the GUI), but CI and users pass flags like
-   --selftest — re-attach to the parent console so print output is visible. */
+   --selftest — re-attach to the parent console so print output is visible.
+   Only re-points streams that have NO usable handle: when the caller
+   redirected stdout/stderr to a file or pipe (CI probes), those handles
+   win — hijacking them to CONOUT$ silently swallowed all probe output. */
 void still_cli_console_init(int argc, char** argv) {
 #ifdef _WIN32
     int want = 0;
@@ -3975,13 +3995,28 @@ void still_cli_console_init(int argc, char** argv) {
         if (argv[i] && argv[i][0] == '-' && argv[i][1] == '-') { want = 1; break; }
     }
     if (!want) return;
+
+    /* is a std stream usable? console (FILE_TYPE_CHAR), file (DISK) or
+       pipe (PIPE) all count; only a missing handle needs the attach */
+    HANDLE so = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE se = GetStdHandle(STD_ERROR_HANDLE);
+    int need_out = (so == NULL || so == INVALID_HANDLE_VALUE ||
+                    GetFileType(so) == FILE_TYPE_UNKNOWN);
+    int need_err = (se == NULL || se == INVALID_HANDLE_VALUE ||
+                    GetFileType(se) == FILE_TYPE_UNKNOWN);
+    if (!need_out && !need_err) return;
+
     typedef int (__stdcall *AttachFn)(unsigned long);
     AttachFn attach = (AttachFn)GetProcAddress(GetModuleHandleA("kernel32.dll"), "AttachConsole");
     if (!attach || !attach((unsigned long)0xFFFFFFFFUL /*ATTACH_PARENT_PROCESS*/)) return;
-    FILE* f1 = freopen("CONOUT$", "w", stdout);
-    FILE* f2 = freopen("CONOUT$", "w", stderr);
-    FILE* f3 = freopen("CONIN$", "r", stdin);
-    (void)f1; (void)f2; (void)f3;
+    if (need_out) {
+        FILE* f1 = freopen("CONOUT$", "w", stdout);
+        (void)f1;
+    }
+    if (need_err) {
+        FILE* f2 = freopen("CONOUT$", "w", stderr);
+        (void)f2;
+    }
 #else
     (void)argc; (void)argv;
 #endif
@@ -4008,8 +4043,12 @@ static LONG __stdcall still_crash_filter(EXCEPTION_POINTERS* ep) {
                     ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionAddress : NULL);
             if (ep && ep->ContextRecord) {
 #if defined(_M_X64) || defined(__x86_64__)
-                fprintf(f, "regs: rip=%p rsp=%p\n",
-                        ep->ContextRecord->Rip, ep->ContextRecord->Rsp);
+                fprintf(f, "regs: rip=%p rsp=%p rbp=%p\n",
+                        ep->ContextRecord->Rip, ep->ContextRecord->Rsp, ep->ContextRecord->Rbp);
+                fprintf(f, "args: rax=%p rcx=%p rdx=%p r8=%p r9=%p\n",
+                        ep->ContextRecord->Rax, ep->ContextRecord->Rcx,
+                        ep->ContextRecord->Rdx, ep->ContextRecord->R8,
+                        ep->ContextRecord->R9);
 #endif
             }
             void* frames[24];
