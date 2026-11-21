@@ -254,10 +254,11 @@ pub fn compile(c_file: &Path, rt_c: &Path, include_dir: &Path, out: &Path, relea
             // window/input programs work out of the box (user32/gdi32 are
             // in every tcc distribution's import set; linking them into
             // console programs costs nothing).
-            // Windows subsystem: no terminal window behind GUI apps. The
-            // runtime re-attaches a console on demand for flag runs like
-            // --selftest (see still_cli_console_init).
-            cmd.arg("-subsystem").arg("windows");
+            // Windows subsystem (tcc syntax is -subsystem=windows): no
+            // terminal window behind GUI apps. The runtime re-attaches a
+            // console on demand for flag runs like --selftest (see
+            // still_cli_console_init).
+            cmd.arg("-subsystem=windows");
             cmd.arg("-luser32").arg("-lgdi32");
         } else {
             cmd.arg("-lm");
@@ -357,7 +358,7 @@ pub fn setup_cc() -> Result<PathBuf, String> {
         // mirrors are tried as fallbacks. v0.4.0 carries the tcc asset
         // (v0.4.1+ dropped it, so try both release tags).
         let urls = [
-            "https://github.com/StillAdum/Still/releases/download/v0.6.9/tcc-win64.zip",
+            "https://github.com/StillAdum/Still/releases/download/v0.6.10/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.0/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.1/tcc-win64.zip",
         ];
