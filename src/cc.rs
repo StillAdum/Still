@@ -396,7 +396,7 @@ pub fn setup_cc() -> Result<PathBuf, String> {
         // mirrors are tried as fallbacks. v0.4.0 carries the tcc asset
         // (v0.4.1+ dropped it, so try both release tags).
         let urls = [
-            "https://github.com/StillAdum/Still/releases/download/v0.6.13/tcc-win64.zip",
+            "https://github.com/StillAdum/Still/releases/download/v0.6.14/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.0/tcc-win64.zip",
             "https://github.com/StillAdum/Still/releases/download/v0.4.1/tcc-win64.zip",
         ];

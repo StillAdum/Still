@@ -549,6 +549,10 @@ still_list_s* still_list_s_reversed(still_list_s* l) {
 
 void still_print_str(still_str* s) {
     fwrite(s->bytes, 1, (size_t)s->len, stdout);
+    /* GUI-subsystem programs have no console; when stdout is redirected to
+       a file (CI probes) it is fully buffered and would be lost on a crash
+       — flush per line like a terminal does */
+    fflush(stdout);
 }
 
 void still_print_int(int64_t v) {
@@ -3792,17 +3796,35 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
         DispatchMessageA(&msg);
     }
 
-    /* cleanup. COM stays initialized and ole32 stays loaded: the WebView2
-       host may still deliver asynchronous completions (browser teardown)
-       after we return, and tearing COM down under it crashes the process. */
+    /* cleanup, in the order WebView2 expects. The key insight: Close() is
+       asynchronous — the controller destroys its browser asynchronously
+       and posts the final completions to OUR message loop. Releasing the
+       COM objects before those completions are dispatched leaves WebView2
+       calling into freed objects = the access violation that crashed
+       wingram right after the login window closed. So: Close, then PUMP
+       the loop for a while so the teardown lands while everything is
+       still alive, then release. */
     if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
-    if (g_wv2_pending_cm) {
-        wv2_release(g_wv2_pending_cm);
-        g_wv2_pending_cm = NULL;
-    }
     if (g_wv2_ctrl_obj) {
         WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
         if (close_fn) close_fn(g_wv2_ctrl_obj);
+        /* pump pending messages (browser teardown completions + any
+           in-flight GetCookies) for up to ~1.5s; WM_QUIT was already
+           consumed by the GetMessage loop so this terminates on its own */
+        for (int spin = 0; spin < 60; spin++) {
+            MSG m;
+            while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&m);
+                DispatchMessageA(&m);
+            }
+            Sleep(25);
+        }
+    }
+    /* release AFTER the pump so an in-flight GetCookies completion never
+       sees a cookie manager we already freed */
+    if (g_wv2_pending_cm) {
+        wv2_release(g_wv2_pending_cm);
+        g_wv2_pending_cm = NULL;
     }
     if (g_wv2_web2_obj) wv2_release(g_wv2_web2_obj);
     if (g_wv2_web_obj) wv2_release(g_wv2_web_obj);
