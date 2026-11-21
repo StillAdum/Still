@@ -580,8 +580,9 @@ void still_gui_set_scale(int64_t handle, double scale);
 int64_t still_webview_available(void);
 const char* still_webview_runtime_version(void);
 const char* still_webview_last_error(void);
-int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted);
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms);
 const char* still_webview_cookie(const char* name);
+int64_t still_webview_poll_count(void);
 
 /* video playback via Media Foundation MFPlay (Windows; no-op elsewhere).
    video_play starts a local file in a child video window of `hwnd`; the

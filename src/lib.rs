@@ -14,7 +14,7 @@ use span::Diag;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub const VERSION: &str = "0.6.12";
+pub const VERSION: &str = "0.6.13";
 
 pub const STD_MATH: &str = include_str!("stdlib/math.strc");
 pub const STD_SORT: &str = include_str!("stdlib/sort.strc");

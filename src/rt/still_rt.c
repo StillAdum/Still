@@ -3274,6 +3274,8 @@ static int g_wv2_status = 0;   /* 0 running, 1 cookies captured, 2 user closed, 
 static unsigned short* g_wv2_poll_url_w = NULL;
 static unsigned short* g_wv2_start_url_w = NULL;
 static char g_wv2_wanted[64] = "sessionid";
+static DWORD g_wv2_deadline = 0;      /* GetTickCount deadline, 0 = wait forever */
+static int g_wv2_poll_count = 0;      /* completed GetCookies round-trips (CI probe) */
 
 /* IID_ICoreWebView2_2 = {9E8F0CF8-E670-4B5E-B2BC-73E061E3184C} */
 static const unsigned char g_wv2_iid_web2[16] = {
@@ -3417,6 +3419,18 @@ static void wv2_resize(void) {
 
 static void wv2_poll_cookies(void) {
     if (g_wv2_status != 0 || !g_wv2_web2_obj) return;
+    /* auto-close when the optional deadline passes (CI probes): treat it
+       as "window closed without the cookie appearing". Wrap-safe unsigned
+       compare: (now - deadline) small means the deadline has passed. */
+    if (g_wv2_deadline) {
+        DWORD now = GetTickCount();
+        if ((DWORD)(now - g_wv2_deadline) < 0x80000000UL) {
+            snprintf(g_wv2_error, sizeof(g_wv2_error), "timed out waiting for the cookie");
+            g_wv2_status = 2;
+            if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+            return;
+        }
+    }
     /* keep the cookie manager alive until its async result arrives:
        release the previous poll's manager only now */
     if (g_wv2_pending_cm) {
@@ -3440,7 +3454,9 @@ static void wv2_poll_cookies(void) {
 
 static long __stdcall wv2_cookies_invoke(void* self, long result, void* list) {
     (void)self;
-    if (result != 0 || !list || g_wv2_status != 0) return 0;
+    if (g_wv2_status != 0) { if (list) wv2_release(list); return 0; }
+    if (result != 0 || !list) return 0;
+    g_wv2_poll_count++;   /* the async cookie pipeline completed a round-trip */
     WV2FnU32P count_fn = (WV2FnU32P)wv2_slot(list, WV2_CLIST_COUNT);
     WV2FnU32VP at_fn = (WV2FnU32VP)wv2_slot(list, WV2_CLIST_VALUE_AT);
     if (count_fn && at_fn) {
@@ -3600,6 +3616,14 @@ const char* still_webview_cookie(const char* name) {
     return "";
 }
 
+/* completed GetCookies round-trips of the last login() call — a non-zero
+   value proves the env -> controller -> navigate -> QI -> cookie-manager
+   -> async-callback chain executed (used by CI probes when the target
+   site itself is unreachable from the runner) */
+int64_t still_webview_poll_count(void) {
+    return (int64_t)g_wv2_poll_count;
+}
+
 static int g_wv2_probe_done = 0;
 static int g_wv2_probe_result = 0;
 
@@ -3652,10 +3676,12 @@ const char* still_webview_runtime_version(void) {
 }
 
 /* Blocking: opens the login browser window and returns when the wanted
-   cookie is captured or the window is closed.
+   cookie is captured, the window is closed, or (when timeout_ms > 0) the
+   deadline passes.
    Returns 1 = cookie captured, 2 = window closed without login, 3 = error.
-   `wanted` names the cookie that ends the dialog (e.g. "sessionid"). */
-int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted) {
+   `wanted` names the cookie that ends the dialog (e.g. "sessionid").
+   poll_count() tells how many cookie round-trips completed (CI diagnostics). */
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms) {
     g_wv2_error[0] = 0;
     g_wv2_cookie_count = 0;
     g_wv2_status = 0;
@@ -3663,6 +3689,9 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     g_wv2_ctrl_obj = NULL;
     g_wv2_web_obj = NULL;
     g_wv2_web2_obj = NULL;
+    g_wv2_poll_count = 0;
+    g_wv2_deadline = 0;
+    if (timeout_ms > 0) g_wv2_deadline = GetTickCount() + (DWORD)timeout_ms;
     snprintf(g_wv2_wanted, sizeof(g_wv2_wanted), "%s",
              (wanted && wanted[0]) ? wanted : "sessionid");
     wv2_init_vtables();
@@ -3887,11 +3916,12 @@ int64_t still_net_save_body(int64_t id, const char* path) { (void)id; (void)path
 int64_t still_webview_available(void) { return 0; }
 const char* still_webview_runtime_version(void) { return ""; }
 const char* still_webview_last_error(void) { return "the webview backend requires Windows"; }
-int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted) {
-    (void)start_url; (void)poll_url; (void)wanted;
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms) {
+    (void)start_url; (void)poll_url; (void)wanted; (void)timeout_ms;
     return 3;
 }
 const char* still_webview_cookie(const char* name) { (void)name; return ""; }
+int64_t still_webview_poll_count(void) { return 0; }
 
 int64_t still_gui_dpi(int64_t handle) { (void)handle; return 96; }
 int64_t still_gui_system_dpi(void) { return 96; }

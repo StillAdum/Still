@@ -20,8 +20,9 @@ extern "C":
     func still_webview_available() -> int
     func still_webview_runtime_version() -> str
     func still_webview_last_error() -> str
-    func still_webview_login(start_url: str, poll_url: str, wanted: str) -> int
+    func still_webview_login(start_url: str, poll_url: str, wanted: str, timeout_ms: int) -> int
     func still_webview_cookie(name: str) -> str
+    func still_webview_poll_count() -> int
 
 func available() -> bool:
     return still_webview_available() == 1
@@ -34,9 +35,17 @@ func last_error() -> str:
 
 # Blocking: opens the login window and returns when done (see codes above).
 # `wanted` is the cookie name that ends the dialog once it exists
-# (instagram logins wait for "sessionid").
-func login(start_url: str, poll_url: str, wanted: str = "sessionid") -> int:
-    return still_webview_login(start_url, poll_url, wanted)
+# (instagram logins wait for "sessionid"). `timeout_ms` > 0 auto-closes the
+# window when the cookie has not appeared in time (CI probes); 0 waits
+# until the user closes it.
+func login(start_url: str, poll_url: str, wanted: str = "sessionid", timeout_ms: int = 0) -> int:
+    return still_webview_login(start_url, poll_url, wanted, timeout_ms)
+
+# completed cookie poll round-trips of the last login() call — non-zero
+# proves the webview + cookie machinery ran (diagnostics for probes when
+# the target site itself is unreachable)
+func poll_count() -> int:
+    return still_webview_poll_count()
 
 func cookie(name: str) -> str:
     return still_webview_cookie(name)
