@@ -3280,6 +3280,7 @@ static unsigned short* g_wv2_start_url_w = NULL;
 static char g_wv2_wanted[64] = "sessionid";
 static DWORD g_wv2_deadline = 0;      /* GetTickCount deadline, 0 = wait forever */
 static int g_wv2_poll_count = 0;      /* completed GetCookies round-trips (CI probe) */
+static int g_wv2_teardown_started = 0;
 
 /* IID_ICoreWebView2_2 = {9E8F0CF8-E670-4B5E-B2BC-73E061E3184C} */
 static const unsigned char g_wv2_iid_web2[16] = {
@@ -3577,6 +3578,35 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
     return 0;
 }
 
+/* Ordered teardown, idempotent. MUST run before the host window is
+   destroyed: the login window is the parent of WebView2's browser child
+   window, so DestroyWindow(parent) rips the browser away from the
+   controller and the controller object dies — calling ctrl->Close() after
+   that (as the old cleanup did) dereferenced a freed object and crashed
+   with 0xC0000005 right after a successful login. Close() is async, so we
+   pump the loop ~1.5s for the browser to finish dying while everything is
+   still alive; only then may the caller destroy the window / release. */
+static void wv2_begin_teardown(void) {
+    if (g_wv2_teardown_started) return;
+    g_wv2_teardown_started = 1;
+    wv2_trace("teardown begin");
+    if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
+    if (g_wv2_ctrl_obj) {
+        WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
+        if (close_fn) close_fn(g_wv2_ctrl_obj);
+        wv2_trace("controller closed, pumping");
+        for (int spin = 0; spin < 60; spin++) {
+            MSG m;
+            while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&m);
+                DispatchMessageA(&m);
+            }
+            Sleep(25);
+        }
+        wv2_trace("pump done");
+    }
+}
+
 static LRESULT CALLBACK wv2_login_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_SIZE:
@@ -3587,6 +3617,8 @@ static LRESULT CALLBACK wv2_login_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             return 0;
         case WM_CLOSE:
             if (g_wv2_status == 0) g_wv2_status = 2;
+            /* close the controller BEFORE destroying its parent window */
+            wv2_begin_teardown();
             DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
@@ -3708,6 +3740,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     g_wv2_web2_obj = NULL;
     g_wv2_poll_count = 0;
     g_wv2_deadline = 0;
+    g_wv2_teardown_started = 0;
     if (timeout_ms > 0) g_wv2_deadline = GetTickCount() + (DWORD)timeout_ms;
     snprintf(g_wv2_wanted, sizeof(g_wv2_wanted), "%s",
              (wanted && wanted[0]) ? wanted : "sessionid");
@@ -3809,33 +3842,10 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
         DispatchMessageA(&msg);
     }
 
-    /* cleanup, in the order WebView2 expects. The key insight: Close() is
-       asynchronous — the controller destroys its browser asynchronously
-       and posts the final completions to OUR message loop. Releasing the
-       COM objects before those completions are dispatched leaves WebView2
-       calling into freed objects = the access violation that crashed
-       wingram right after the login window closed. So: Close, then PUMP
-       the loop for a while so the teardown lands while everything is
-       still alive, then release. */
-    wv2_trace("teardown begin");
-    if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
-    if (g_wv2_ctrl_obj) {
-        WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
-        if (close_fn) close_fn(g_wv2_ctrl_obj);
-        wv2_trace("controller closed, pumping");
-        /* pump pending messages (browser teardown completions + any
-           in-flight GetCookies) for up to ~1.5s; WM_QUIT was already
-           consumed by the GetMessage loop so this terminates on its own */
-        for (int spin = 0; spin < 60; spin++) {
-            MSG m;
-            while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&m);
-                DispatchMessageA(&m);
-            }
-            Sleep(25);
-        }
-        wv2_trace("pump done");
-    }
+    /* cleanup: teardown already ran from WM_CLOSE (it must happen before
+       the window dies); this covers the paths that never went through
+       WM_CLOSE (env-create failure and friends) */
+    wv2_begin_teardown();
     /* release AFTER the pump so an in-flight GetCookies completion never
        sees a cookie manager we already freed */
     if (g_wv2_pending_cm) {
