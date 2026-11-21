@@ -3148,7 +3148,6 @@ int64_t still_media_video_play(const char* path, int64_t hwnd) {
     typedef long (__stdcall *CreatePlayerFn)(const unsigned short*, int, void*, void*, void**, void**);
     CreatePlayerFn create = (CreatePlayerFn)GetProcAddress((HMODULE)g_mf_dll, "MFPCreateMediaPlayer");
     if (!create) return 0;
-
     /* dedicated child window for the video, positioned by video_rect();
        created hidden and shown once playback actually starts */
     HWND child = CreateWindowExW(0, L"STATIC", L"", WS_CHILD,
@@ -3523,9 +3522,10 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
        cookie manager call then goes through the right interface pointer
        instead of assuming the appended-vtable layout of the base pointer. */
     if (g_wv2_web_obj) {
-        WV2FnVP qi = (WV2FnVP)wv2_slot(g_wv2_web_obj, 0);
         void* web2 = NULL;
-        if (qi && qi(g_wv2_web_obj, (const void*)g_wv2_iid_web2, &web2) == 0 && web2) {
+        typedef long (__stdcall *QiFn)(void*, const void*, void**);
+        QiFn qi2 = (QiFn)wv2_slot(g_wv2_web_obj, 0);
+        if (qi2 && qi2(g_wv2_web_obj, (const void*)g_wv2_iid_web2, &web2) == 0 && web2) {
             g_wv2_web2_obj = web2;
         } else {
             /* older runtime without _2: cookies unavailable */
@@ -3961,7 +3961,16 @@ static LONG __stdcall still_crash_filter(EXCEPTION_POINTERS* ep) {
 #endif
             }
             void* frames[24];
-            USHORT count = CaptureStackBackTrace(0, 24, frames, NULL);
+            USHORT count = 0;
+            {
+                /* resolved dynamically: some import libraries (tcc's) lack
+                   CaptureStackBackTrace; kernel32 usually forwards it to
+                   ntdll!RtlCaptureStackBackTrace */
+                typedef unsigned short (WINAPI *CaptureTraceFn)(unsigned long, unsigned long, void**, unsigned long*);
+                CaptureTraceFn cap = (CaptureTraceFn)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CaptureStackBackTrace");
+                if (!cap) cap = (CaptureTraceFn)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlCaptureStackBackTrace");
+                if (cap) count = cap(0, 24, frames, NULL);
+            }
             fprintf(f, "stack (%u frames):\n", (unsigned)count);
             for (USHORT i = 0; i < count; i++) {
                 HMODULE m = NULL;
