@@ -23,6 +23,7 @@ extern "C":
     func still_webview_login(start_url: str, poll_url: str, wanted: str, timeout_ms: int) -> int
     func still_webview_cookie(name: str) -> str
     func still_webview_poll_count() -> int
+    func still_webview_stage() -> int
 
 func available() -> bool:
     return still_webview_available() == 1
@@ -46,6 +47,11 @@ func login(start_url: str, poll_url: str, wanted: str = "sessionid", timeout_ms:
 # the target site itself is unreachable)
 func poll_count() -> int:
     return still_webview_poll_count()
+
+# how far the last login() got: 0 nothing, 1 environment created,
+# 2 controller + cookie interface ready, 3 cookie polling started
+func stage() -> int:
+    return still_webview_stage()
 
 func cookie(name: str) -> str:
     return still_webview_cookie(name)

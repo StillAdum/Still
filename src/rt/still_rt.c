@@ -3281,6 +3281,7 @@ static char g_wv2_wanted[64] = "sessionid";
 static DWORD g_wv2_deadline = 0;      /* GetTickCount deadline, 0 = wait forever */
 static int g_wv2_poll_count = 0;      /* completed GetCookies round-trips (CI probe) */
 static int g_wv2_teardown_started = 0;
+static int g_wv2_stage = 0;           /* 0 start, 1 env ok, 2 ctrl+QI ok, 3 polling */
 
 /* IID_ICoreWebView2_2 = {9E8F0CF8-E670-4B5E-B2BC-73E061E3184C} */
 static const unsigned char g_wv2_iid_web2[16] = {
@@ -3327,11 +3328,37 @@ static void* wv2_slot(void* obj, int idx) {
 }
 
 /* env-gated stage tracing (STILL_WV2_TRACE=1) for CI diagnosis, same
-   pattern as the net layer's STILL_NET_TRACE */
+   pattern as the net layer's STILL_NET_TRACE. Also appends to
+   wingram-wv2.log next to the exe so traces survive even when stderr
+   redirection is flaky. */
 static int g_wv2_trace = -1;
 static void wv2_trace(const char* stage) {
     if (g_wv2_trace < 0) g_wv2_trace = (getenv("STILL_WV2_TRACE") != NULL) ? 1 : 0;
-    if (g_wv2_trace) fprintf(stderr, "still_webview: %s\n", stage);
+    if (!g_wv2_trace) return;
+    fprintf(stderr, "still_webview: %s\n", stage);
+    FILE* f = fopen("wingram-wv2.log", "a");
+    if (f) {
+        fprintf(f, "%lu %s\n", (unsigned long)GetTickCount(), stage);
+        fclose(f);
+    }
+}
+
+/* Liveness heuristic for a COM object we hold: its vtable pointer must
+   point INTO a loaded module's image (real vtables live in DLL data
+   sections). A freed object's first qword is heap garbage — e.g.
+   0xFFEAECFFFFFFFFF — which belongs to no module. Used to survive
+   teardown when WebView2 has already torn an object down under us. */
+static int wv2_obj_alive(void* obj) {
+    if (!obj) return 0;
+    void** vt = *(void***)obj;
+    if (!vt) return 0;
+    HMODULE m = NULL;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)vt, &m) || !m) {
+        return 0;
+    }
+    return 1;
 }
 
 static unsigned long wv2_release(void* obj) {
@@ -3445,6 +3472,13 @@ static void wv2_poll_cookies(void) {
             return;
         }
     }
+    if (!wv2_obj_alive(g_wv2_web2_obj)) {
+        wv2_trace("web object died mid-session (browser teardown?)");
+        snprintf(g_wv2_error, sizeof(g_wv2_error), "the webview went away");
+        g_wv2_status = 3;
+        if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
+        return;
+    }
     /* keep the cookie manager alive until its async result arrives:
        release the previous poll's manager only now */
     if (g_wv2_pending_cm) {
@@ -3523,6 +3557,7 @@ static long __stdcall wv2_env_invoke(void* self, long result, void* env) {
         return 0;
     }
     g_wv2_env_obj = env;
+    g_wv2_stage = 1;
     WV2FnHwnd create = (WV2FnHwnd)wv2_slot(env, WV2_ENV_CREATE_CONTROLLER);
     if (!create) {
         snprintf(g_wv2_error, sizeof(g_wv2_error), "webview environment too old");
@@ -3545,6 +3580,7 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
         return 0;
     }
     g_wv2_ctrl_obj = ctrl;
+    g_wv2_stage = 2;
     WV2FnV get_web = (WV2FnV)wv2_slot(ctrl, WV2_CTRL_GET_WEBVIEW);
     WV2FnInt vis_fn = (WV2FnInt)wv2_slot(ctrl, WV2_CTRL_PUT_ISVISIBLE);
     if (get_web) get_web(ctrl, &g_wv2_web_obj);
@@ -3575,6 +3611,8 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
         if (nav) nav(g_wv2_web_obj, g_wv2_start_url_w);
     }
     if (g_wv2_hwnd) SetTimer(g_wv2_hwnd, 1, 1200, NULL);
+    g_wv2_stage = 3;
+    wv2_trace("timer started, polling cookies");
     return 0;
 }
 
@@ -3592,9 +3630,13 @@ static void wv2_begin_teardown(void) {
     wv2_trace("teardown begin");
     if (g_wv2_hwnd && IsWindow(g_wv2_hwnd)) KillTimer(g_wv2_hwnd, 1);
     if (g_wv2_ctrl_obj) {
-        WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
-        if (close_fn) close_fn(g_wv2_ctrl_obj);
-        wv2_trace("controller closed, pumping");
+        if (wv2_obj_alive(g_wv2_ctrl_obj)) {
+            WV2Fn0 close_fn = (WV2Fn0)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_CLOSE);
+            if (close_fn) close_fn(g_wv2_ctrl_obj);
+            wv2_trace("controller closed, pumping");
+        } else {
+            wv2_trace("controller object already dead, skipping Close");
+        }
         for (int spin = 0; spin < 60; spin++) {
             MSG m;
             while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
@@ -3673,6 +3715,12 @@ int64_t still_webview_poll_count(void) {
     return (int64_t)g_wv2_poll_count;
 }
 
+/* how far the last login() got: 0 nothing, 1 environment created,
+   2 controller + ICoreWebView2_2 ready, 3 cookie polling started */
+int64_t still_webview_stage(void) {
+    return (int64_t)g_wv2_stage;
+}
+
 static int g_wv2_probe_done = 0;
 static int g_wv2_probe_result = 0;
 
@@ -3741,6 +3789,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     g_wv2_poll_count = 0;
     g_wv2_deadline = 0;
     g_wv2_teardown_started = 0;
+    g_wv2_stage = 0;
     if (timeout_ms > 0) g_wv2_deadline = GetTickCount() + (DWORD)timeout_ms;
     snprintf(g_wv2_wanted, sizeof(g_wv2_wanted), "%s",
              (wanted && wanted[0]) ? wanted : "sessionid");
@@ -3834,28 +3883,37 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
         snprintf(g_wv2_error, sizeof(g_wv2_error),
                  "could not start the webview environment (0x%08lx)", (unsigned long)hr);
         g_wv2_status = 3;
+        PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
     }
 
+    /* The canonical message loop: pump until WM_QUIT. WM_CLOSE (posted by
+       the cookie capture, the deadline or the user) drives the ordered
+       teardown + DestroyWindow INSIDE the handler; the old loop's
+       `status == 0` gate made the loop exit the moment status changed,
+       WITHOUT dispatching the posted WM_CLOSE — so the teardown ran from
+       the cleanup path against objects WebView2 had already freed. */
+    wv2_trace("message loop");
     MSG msg;
-    while (g_wv2_status == 0 && GetMessageA(&msg, NULL, 0, 0) > 0) {
+    while (GetMessageA(&msg, NULL, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
+    wv2_trace("message loop exited");
 
     /* cleanup: teardown already ran from WM_CLOSE (it must happen before
        the window dies); this covers the paths that never went through
        WM_CLOSE (env-create failure and friends) */
     wv2_begin_teardown();
-    /* release AFTER the pump so an in-flight GetCookies completion never
-       sees a cookie manager we already freed */
-    if (g_wv2_pending_cm) {
+    /* release AFTER the pump; skip anything WebView2 already freed (the
+       liveness check) so a mid-session browser teardown cannot crash us */
+    if (g_wv2_pending_cm && wv2_obj_alive(g_wv2_pending_cm)) {
         wv2_release(g_wv2_pending_cm);
-        g_wv2_pending_cm = NULL;
     }
-    if (g_wv2_web2_obj) wv2_release(g_wv2_web2_obj);
-    if (g_wv2_web_obj) wv2_release(g_wv2_web_obj);
-    if (g_wv2_ctrl_obj) wv2_release(g_wv2_ctrl_obj);
-    if (g_wv2_env_obj) wv2_release(g_wv2_env_obj);
+    g_wv2_pending_cm = NULL;
+    if (g_wv2_web2_obj && wv2_obj_alive(g_wv2_web2_obj)) wv2_release(g_wv2_web2_obj);
+    if (g_wv2_web_obj && wv2_obj_alive(g_wv2_web_obj)) wv2_release(g_wv2_web_obj);
+    if (g_wv2_ctrl_obj && wv2_obj_alive(g_wv2_ctrl_obj)) wv2_release(g_wv2_ctrl_obj);
+    if (g_wv2_env_obj && wv2_obj_alive(g_wv2_env_obj)) wv2_release(g_wv2_env_obj);
     wv2_trace("objects released");
     if (IsWindow(g_wv2_hwnd)) DestroyWindow(g_wv2_hwnd);
     g_wv2_hwnd = NULL;
@@ -3971,6 +4029,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
 }
 const char* still_webview_cookie(const char* name) { (void)name; return ""; }
 int64_t still_webview_poll_count(void) { return 0; }
+int64_t still_webview_stage(void) { return 0; }
 
 int64_t still_gui_dpi(int64_t handle) { (void)handle; return 96; }
 int64_t still_gui_system_dpi(void) { return 96; }
