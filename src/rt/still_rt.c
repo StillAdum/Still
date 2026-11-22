@@ -2329,16 +2329,6 @@ typedef struct {
 #define WM_DPICHANGED 0x02E0
 #endif
 
-/* Minimal MINMAXINFO replica (avoids depending on SDK header versions) */
-typedef struct {
-    POINT ptReserved1;
-    POINT ptReserved2;
-    POINT ptMaxSize;
-    POINT ptMaxPosition;
-    POINT ptMinTrackSize;
-    POINT ptMaxTrackSize;
-} StilMinMaxInfo;
-
 typedef struct {
     HWND hwnd;
     HDC mem;
@@ -2410,7 +2400,7 @@ LRESULT CALLBACK gui_wndproc_real(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_GETMINMAXINFO: {
             /* keep the window resizable/maximizable with a sane minimum size */
-            StilMinMaxInfo* mmi = (StilMinMaxInfo*)lp;
+            MINMAXINFO* mmi = (MINMAXINFO*)lp;
             if (mmi) {
                 UINT dpi = (w && w->dpi > 0) ? (UINT)w->dpi : 96;
                 mmi->ptMinTrackSize.x = (LONG)(460 * dpi / 96);
@@ -3282,6 +3272,9 @@ static DWORD g_wv2_deadline = 0;      /* GetTickCount deadline, 0 = wait forever
 static int g_wv2_poll_count = 0;      /* completed GetCookies round-trips (CI probe) */
 static int g_wv2_teardown_started = 0;
 static int g_wv2_stage = 0;           /* 0 start, 1 env ok, 2 ctrl+QI ok, 3 polling */
+static int g_wv2_resize_pending = 0;
+static int g_wv2_poll_pending = 0;
+static int g_wv2_close_pending = 0;
 
 /* IID_ICoreWebView2_2 = {9E8F0CF8-E670-4B5E-B2BC-73E061E3184C} */
 static const unsigned char g_wv2_iid_web2[16] = {
@@ -3348,10 +3341,22 @@ static void wv2_trace(const char* stage) {
    sections). A freed object's first qword is heap garbage — e.g.
    0xFFEAECFFFFFFFFF — which belongs to no module. Used to survive
    teardown when WebView2 has already torn an object down under us. */
+static int wv2_readable(const void* address, size_t size) {
+    MEMORY_BASIC_INFORMATION info;
+    if (!address || !size || VirtualQuery(address, &info, sizeof(info)) != sizeof(info)) return 0;
+    if (info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return 0;
+    DWORD protection = info.Protect & 0xFF;
+    if (protection == PAGE_EXECUTE) return 0;
+    uintptr_t start = (uintptr_t)address;
+    uintptr_t region = (uintptr_t)info.BaseAddress;
+    uintptr_t end = region + info.RegionSize;
+    return start >= region && start <= end && size <= end - start;
+}
+
 static int wv2_obj_alive(void* obj) {
-    if (!obj) return 0;
+    if (!wv2_readable(obj, sizeof(void*))) return 0;
     void** vt = *(void***)obj;
-    if (!vt) return 0;
+    if (!wv2_readable(vt, sizeof(void*))) return 0;
     HMODULE m = NULL;
     if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -3450,7 +3455,7 @@ static void wv2_set_cookie(const char* name, const char* value) {
 }
 
 static void wv2_resize(void) {
-    if (!g_wv2_ctrl_obj || !g_wv2_hwnd) return;
+    if (g_wv2_teardown_started || !g_wv2_hwnd || !wv2_obj_alive(g_wv2_ctrl_obj)) return;
     RECT cr;
     if (!GetClientRect(g_wv2_hwnd, &cr)) return;
     WV2FnRect bounds_fn = (WV2FnRect)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_PUT_BOUNDS);
@@ -3652,20 +3657,20 @@ static void wv2_begin_teardown(void) {
 static LRESULT CALLBACK wv2_login_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_SIZE:
-            /* WM_SIZE/WM_TIMER can fire from inside DefWindowProc's modal
-               loops (drag, maximize, uxtheme paint); during/after teardown
-               the COM objects may already be freed (0xC0000005 +0x9DFF2) */
-            if (!g_wv2_teardown_started && g_wv2_ctrl_obj) wv2_resize();
+            /* User32 may dispatch this inside a nested sizing/theme loop.
+               Defer all WebView COM calls until the outer message dispatch
+               returns to our own message pump. */
+            if (!g_wv2_teardown_started) g_wv2_resize_pending = 1;
             return 0;
         case WM_TIMER:
-            if (wp == 1 && !g_wv2_teardown_started && g_wv2_ctrl_obj) wv2_poll_cookies();
+            if (wp == 1 && !g_wv2_teardown_started) g_wv2_poll_pending = 1;
             return 0;
         case WM_CLOSE:
             if (!g_wv2_teardown_started) {
                 if (g_wv2_status == 0) g_wv2_status = 2;
-                /* close the controller BEFORE destroying its parent window */
-                wv2_begin_teardown();
-                DestroyWindow(hwnd);
+                /* Close() and DestroyWindow() can pump/re-enter User32.
+                   Perform ordered teardown after this dispatch unwinds. */
+                g_wv2_close_pending = 1;
             }
             return 0;
         case WM_DESTROY:
@@ -3795,6 +3800,9 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     g_wv2_deadline = 0;
     g_wv2_teardown_started = 0;
     g_wv2_stage = 0;
+    g_wv2_resize_pending = 0;
+    g_wv2_poll_pending = 0;
+    g_wv2_close_pending = 0;
     if (timeout_ms > 0) g_wv2_deadline = GetTickCount() + (DWORD)timeout_ms;
     snprintf(g_wv2_wanted, sizeof(g_wv2_wanted), "%s",
              (wanted && wanted[0]) ? wanted : "sessionid");
@@ -3902,6 +3910,21 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     while (GetMessageA(&msg, NULL, 0, 0) > 0) {
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
+        if (g_wv2_close_pending && !g_wv2_teardown_started) {
+            g_wv2_close_pending = 0;
+            /* close the controller BEFORE destroying its parent window */
+            wv2_begin_teardown();
+            if (IsWindow(g_wv2_hwnd)) DestroyWindow(g_wv2_hwnd);
+        } else if (!g_wv2_teardown_started) {
+            if (g_wv2_resize_pending) {
+                g_wv2_resize_pending = 0;
+                wv2_resize();
+            }
+            if (g_wv2_poll_pending) {
+                g_wv2_poll_pending = 0;
+                wv2_poll_cookies();
+            }
+        }
     }
     wv2_trace("message loop exited");
 

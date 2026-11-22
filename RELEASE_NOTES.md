@@ -1,3 +1,17 @@
+# Still v0.6.19 — Win32 maximize layout and re-entrant WebView callbacks
+
+- **Correct Win32 maximize constraints.** The GUI window procedure now uses
+  the SDK's `MINMAXINFO` layout instead of a hand-written mirror with an
+  extra `POINT`. The old offsets overwrote the wrong maximize/minimum-track
+  fields and wrote past the end of the structure, preventing maximization
+  and corrupting memory during ordinary window creation.
+- **Defer WebView2 work out of nested window procedures.** Resize, cookie
+  polling, and close/teardown work requested by `WM_SIZE`, `WM_TIMER`, and
+  `WM_CLOSE` is now performed after message dispatch unwinds. This avoids
+  re-entering WebView2 COM while User32 is in modal sizing/theme loops, the
+  path implicated by Wingram's access-violation crash log. Stale COM pointers
+  are checked for committed readable memory before inspecting their vtables.
+
 # Still v0.6.8 — clang-MSVC compat for windows-subsystem linking
 
 - v0.6.5 added `-mwindows` to the generic C compiler branch; clang targeting
