@@ -3338,6 +3338,7 @@ static int g_wv2_stage = 0;           /* 0 start, 1 env ok, 2 ctrl+QI ok, 3 poll
 static int g_wv2_resize_pending = 0;
 static int g_wv2_poll_pending = 0;
 static int g_wv2_close_pending = 0;
+static int g_wv2_bounds_ok = 0;   /* put_Bounds succeeded (CI blank-window guard) */
 
 /* IID_ICoreWebView2_2 = {9E8F0CF8-E670-4B5E-B2BC-73E061E3184C} */
 static const unsigned char g_wv2_iid_web2[16] = {
@@ -3522,7 +3523,9 @@ static void wv2_resize(void) {
     RECT cr;
     if (!GetClientRect(g_wv2_hwnd, &cr)) return;
     WV2FnRect bounds_fn = (WV2FnRect)wv2_slot(g_wv2_ctrl_obj, WV2_CTRL_PUT_BOUNDS);
-    if (bounds_fn) bounds_fn(g_wv2_ctrl_obj, cr);
+    if (bounds_fn && cr.right > cr.left && cr.bottom > cr.top) {
+        if (bounds_fn(g_wv2_ctrl_obj, cr) == 0) g_wv2_bounds_ok = 1;
+    }
 }
 
 static void wv2_poll_cookies(void) {
@@ -3570,7 +3573,7 @@ static void wv2_poll_cookies(void) {
 
 static long __stdcall wv2_cookies_invoke(void* self, long result, void* list) {
     (void)self;
-    if (g_wv2_status != 0) { if (list) wv2_release(list); return 0; }
+    if (g_wv2_status != 0) return 0;
     if (result != 0 || !list) return 0;
     g_wv2_poll_count++;   /* the async cookie pipeline completed a round-trip */
     WV2FnU32P count_fn = (WV2FnU32P)wv2_slot(list, WV2_CLIST_COUNT);
@@ -3600,11 +3603,14 @@ static long __stdcall wv2_cookies_invoke(void* self, long result, void* list) {
                     if (wname_v) wv2_cofree(wname_v);
                     if (wvalue_v) wv2_cofree(wvalue_v);
                 }
-                wv2_release(cookie);
+                wv2_release(cookie);   /* out-params are AddRef'd: ours to free */
             }
         }
     }
-    wv2_release(list);
+    /* `list` is borrowed: WebView2 owns the reference it passed to this
+       handler and releases it after Invoke returns. Calling Release here
+       dropped the last reference, destroyed the list, and WebView2 then
+       touched the freed object -> 0xC0000005 after a successful capture. */
     char* sid = wv2_get_cookie_value(g_wv2_wanted);
     if (sid && sid[0] != 0) {
         g_wv2_status = 1;
@@ -3624,6 +3630,8 @@ static long __stdcall wv2_env_invoke(void* self, long result, void* env) {
         if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
         return 0;
     }
+    WV2Fn0 env_addref = (WV2Fn0)wv2_slot(env, 1);
+    if (env_addref) env_addref(env);
     g_wv2_env_obj = env;
     g_wv2_stage = 1;
     WV2FnHwnd create = (WV2FnHwnd)wv2_slot(env, WV2_ENV_CREATE_CONTROLLER);
@@ -3647,6 +3655,8 @@ static long __stdcall wv2_ctrl_invoke(void* self, long result, void* ctrl) {
         if (g_wv2_hwnd) PostMessageA(g_wv2_hwnd, WM_CLOSE, 0, 0);
         return 0;
     }
+    WV2Fn0 ctrl_addref = (WV2Fn0)wv2_slot(ctrl, 1);
+    if (ctrl_addref) ctrl_addref(ctrl);
     g_wv2_ctrl_obj = ctrl;
     g_wv2_stage = 2;
     WV2FnV get_web = (WV2FnV)wv2_slot(ctrl, WV2_CTRL_GET_WEBVIEW);
@@ -3794,6 +3804,13 @@ int64_t still_webview_stage(void) {
     return (int64_t)g_wv2_stage;
 }
 
+/* 1 once put_Bounds accepted a non-empty client rectangle — proves the
+   WebView2 child window is actually attached and sized. A controller that
+   was released too early still reports stage 2/3 but never gets here. */
+int64_t still_webview_bounds_ok(void) {
+    return (int64_t)g_wv2_bounds_ok;
+}
+
 static int g_wv2_probe_done = 0;
 static int g_wv2_probe_result = 0;
 
@@ -3866,6 +3883,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     g_wv2_resize_pending = 0;
     g_wv2_poll_pending = 0;
     g_wv2_close_pending = 0;
+    g_wv2_bounds_ok = 0;
     if (timeout_ms > 0) g_wv2_deadline = GetTickCount() + (DWORD)timeout_ms;
     snprintf(g_wv2_wanted, sizeof(g_wv2_wanted), "%s",
              (wanted && wanted[0]) ? wanted : "sessionid");

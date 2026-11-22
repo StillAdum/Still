@@ -24,6 +24,7 @@ extern "C":
     func still_webview_cookie(name: str) -> str
     func still_webview_poll_count() -> int
     func still_webview_stage() -> int
+    func still_webview_bounds_ok() -> int
 
 func available() -> bool:
     return still_webview_available() == 1
@@ -52,6 +53,12 @@ func poll_count() -> int:
 # 2 controller + cookie interface ready, 3 cookie polling started
 func stage() -> int:
     return still_webview_stage()
+
+# true once the WebView2 child window was attached and sized (put_Bounds
+# succeeded). A blank login window usually means this is false even though
+# stage() reached 2 or 3.
+func bounds_ok() -> bool:
+    return still_webview_bounds_ok() == 1
 
 func cookie(name: str) -> str:
     return still_webview_cookie(name)

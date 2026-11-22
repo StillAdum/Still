@@ -586,6 +586,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
 const char* still_webview_cookie(const char* name);
 int64_t still_webview_poll_count(void);
 int64_t still_webview_stage(void);
+int64_t still_webview_bounds_ok(void);
 
 /* video playback via Media Foundation MFPlay (Windows; no-op elsewhere).
    video_play starts a local file in a child video window of `hwnd`; the

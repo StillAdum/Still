@@ -1,3 +1,21 @@
+# Still v0.6.22 — Keep the WebView2 controller alive
+
+- **Fix the blank WebView login window.** The environment and controller
+  pointers handed to their completion handlers are borrowed, not owned. The
+  runtime now calls `AddRef` before storing them, so WebView2 no longer
+  destroys the controller (and its child window) the instant the callback
+  returns. Previously `put_Bounds` ran inside the callback and succeeded,
+  then the controller was released and the window went dark — while the
+  cookie probe still reported stage 3 and "passed".
+- **Fix a crash right after a successful login (0xC0000005).** The cookie
+  list passed to the `GetCookies` completion handler is borrowed; the
+  runtime released it as if it owned a reference. That dropped the last
+  reference, freed the list, and WebView2 then touched the freed object as
+  the callback unwound. The handler now leaves the list to WebView2.
+- **Add `webview.bounds_ok()`** so callers and CI can verify the WebView2
+  child window was actually attached and sized, not just that the COM chain
+  reached the polling stage.
+
 # Still v0.6.21 — DPI-correct initial window size
 
 - **Honor `open_window` sizes as logical pixels.** `gui.open_window` now
