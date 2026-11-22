@@ -490,13 +490,26 @@ LRESULT CALLBACK gui_wndproc_real(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_PAINT: {
+            /* validate AND blit: BeginPaint/EndPaint alone left the window
+               unpainted whenever the frame loop stalled (modal move/size
+               loops) - the maximize+move black screen */
             PAINTSTRUCT ps;
-            BeginPaint(hwnd, &ps);
+            HDC dc = BeginPaint(hwnd, &ps);
+            if (dc && w && w->mem) {
+                BitBlt(dc, 0, 0, w->w, w->h, w->mem, 0, 0, SRCCOPY);
+            }
             EndPaint(hwnd, &ps);
             return 0;
         }
-        case WM_ERASEBKGND:
+        case WM_ERASEBKGND: {
+            /* actually paint over the exposed area: returning 1 without
+               drawing left stale pixels / bleed-through at the edges */
+            HDC hdc = (HDC)wp;
+            if (hdc && w && w->mem) {
+                BitBlt(hdc, 0, 0, w->w, w->h, w->mem, 0, 0, SRCCOPY);
+            }
             return 1;
+        }
         case WM_CLOSE: {
             if (w) w->open = 0;
             DestroyWindow(hwnd);
@@ -559,6 +572,20 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
         return 0;
     }
     win->hwnd = hwnd;
+    /* Unicode titles: CreateWindowExA stored raw UTF-8 bytes as ANSI, so an
+       em-dash rendered as mojibake. Rewrite through the W API after creation. */
+    if (t && t[0]) {
+        int wn = MultiByteToWideChar(CP_UTF8, 0, t, -1, NULL, 0);
+        if (wn > 0) {
+            wchar_t* wname = (wchar_t*)HeapAlloc(GetProcessHeap(), 0, (size_t)wn * sizeof(wchar_t));
+            if (wname) {
+                if (MultiByteToWideChar(CP_UTF8, 0, t, -1, wname, wn) > 0) {
+                    SetWindowTextW(hwnd, wname);
+                }
+                HeapFree(GetProcessHeap(), 0, wname);
+            }
+        }
+    }
     win->w = (int)w;
     win->h = (int)h;
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
