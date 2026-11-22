@@ -20,7 +20,7 @@ extern "C":
     func still_webview_available() -> int
     func still_webview_runtime_version() -> str
     func still_webview_last_error() -> str
-    func still_webview_login(start_url: str, poll_url: str, wanted: str, timeout_ms: int) -> int
+    func still_webview_login(start_url: str, poll_url: str, wanted: str, timeout_ms: int, owner: int) -> int
     func still_webview_cookie(name: str) -> str
     func still_webview_poll_count() -> int
     func still_webview_stage() -> int
@@ -39,8 +39,8 @@ func last_error() -> str:
 # (instagram logins wait for "sessionid"). `timeout_ms` > 0 auto-closes the
 # window when the cookie has not appeared in time (CI probes); 0 waits
 # until the user closes it.
-func login(start_url: str, poll_url: str, wanted: str = "sessionid", timeout_ms: int = 0) -> int:
-    return still_webview_login(start_url, poll_url, wanted, timeout_ms)
+func login(start_url: str, poll_url: str, wanted: str = "sessionid", timeout_ms: int = 0, owner: int = 0) -> int:
+    return still_webview_login(start_url, poll_url, wanted, timeout_ms, owner)
 
 # completed cookie poll round-trips of the last login() call — non-zero
 # proves the webview + cookie machinery ran (diagnostics for probes when

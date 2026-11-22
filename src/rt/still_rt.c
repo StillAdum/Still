@@ -2730,6 +2730,41 @@ const char* still_gui_text_input(int64_t handle) {
     return (w && w->input_len > 0) ? w->input : "";
 }
 
+const char* still_gui_clipboard_read(void) {
+    static char text[4096];
+    text[0] = 0;
+    if (!OpenClipboard(NULL)) return text;
+    HANDLE data = GetClipboardData(CF_UNICODETEXT);
+    const wchar_t* wide = data ? (const wchar_t*)GlobalLock(data) : NULL;
+    if (wide) {
+        char* utf8 = still_narrow(wide);
+        snprintf(text, sizeof(text), "%s", utf8);
+        free(utf8);
+        GlobalUnlock(data);
+    }
+    CloseClipboard();
+    return text;
+}
+
+int64_t still_gui_clipboard_write(const char* text) {
+    if (!text) return 0;
+    wchar_t* wide = still_wide(text);
+    if (!wide) return 0;
+    size_t bytes = (wcslen(wide) + 1) * sizeof(wchar_t);
+    HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!data) { free(wide); return 0; }
+    wchar_t* dst = (wchar_t*)GlobalLock(data);
+    if (!dst) { GlobalFree(data); free(wide); return 0; }
+    memcpy(dst, wide, bytes);
+    GlobalUnlock(data);
+    free(wide);
+    if (!OpenClipboard(NULL)) { GlobalFree(data); return 0; }
+    int ok = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, data) != NULL;
+    CloseClipboard();
+    if (!ok) GlobalFree(data);
+    return ok ? 1 : 0;
+}
+
 int64_t still_gui_key(int64_t handle, int64_t vk) {
     StilWindow* w = gui_win(handle);
     if (!w || vk < 0 || vk > 255) return 0;
@@ -3788,7 +3823,7 @@ const char* still_webview_runtime_version(void) {
    Returns 1 = cookie captured, 2 = window closed without login, 3 = error.
    `wanted` names the cookie that ends the dialog (e.g. "sessionid").
    poll_count() tells how many cookie round-trips completed (CI diagnostics). */
-int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms) {
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms, int64_t owner) {
     g_wv2_error[0] = 0;
     g_wv2_cookie_count = 0;
     g_wv2_status = 0;
@@ -3863,10 +3898,11 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     int x = wa.left + (((wa.right - wa.left) - (r.right - r.left)) / 2);
     int y = wa.top + (((wa.bottom - wa.top) - (r.bottom - r.top)) / 2);
 
+    HWND owner_hwnd = (HWND)(uintptr_t)owner;
     HWND hwnd = CreateWindowExW(0, L"StillWV2Login", L"Wingram - Sign in to Instagram",
                                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                                 x, y, r.right - r.left, r.bottom - r.top,
-                                NULL, NULL, GetModuleHandleA(NULL), NULL);
+                                owner_hwnd, NULL, GetModuleHandleA(NULL), NULL);
     if (!hwnd) {
         free(start_w);
         free((void*)g_wv2_poll_url_w);
@@ -3884,7 +3920,10 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     udf[0] = 0;
     DWORD un = GetEnvironmentVariableA("LOCALAPPDATA", udf, (DWORD)sizeof(udf) - 1);
     if (un > 0 && un < sizeof(udf) - 32) {
-        strncat(udf, "\\Wingram\\WebView2", sizeof(udf) - strlen(udf) - 1);
+        strncat(udf, "\\Wingram", sizeof(udf) - strlen(udf) - 1);
+        CreateDirectoryA(udf, NULL);
+        strncat(udf, "\\WebView2", sizeof(udf) - strlen(udf) - 1);
+        CreateDirectoryA(udf, NULL);
     } else {
         snprintf(udf, sizeof(udf), "%s", "WingramWebView2Data");
     }
@@ -3997,6 +4036,8 @@ int64_t still_gui_mouse_down(int64_t handle) { (void)handle; return 0; }
 int64_t still_gui_mouse_clicked(int64_t handle) { (void)handle; return 0; }
 int64_t still_gui_wheel_delta(int64_t handle) { (void)handle; return 0; }
 const char* still_gui_text_input(int64_t handle) { (void)handle; return ""; }
+const char* still_gui_clipboard_read(void) { return ""; }
+int64_t still_gui_clipboard_write(const char* text) { (void)text; return 0; }
 int64_t still_gui_key(int64_t handle, int64_t vk) { (void)handle; (void)vk; return 0; }
 int64_t still_gui_key_pressed(int64_t handle, int64_t vk) { (void)handle; (void)vk; return 0; }
 void still_gui_text(int64_t handle, double x, double y, const char* text, int64_t rgb, double size) {
@@ -4051,8 +4092,8 @@ int64_t still_net_save_body(int64_t id, const char* path) { (void)id; (void)path
 int64_t still_webview_available(void) { return 0; }
 const char* still_webview_runtime_version(void) { return ""; }
 const char* still_webview_last_error(void) { return "the webview backend requires Windows"; }
-int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms) {
-    (void)start_url; (void)poll_url; (void)wanted; (void)timeout_ms;
+int64_t still_webview_login(const char* start_url, const char* poll_url, const char* wanted, int64_t timeout_ms, int64_t owner) {
+    (void)start_url; (void)poll_url; (void)wanted; (void)timeout_ms; (void)owner;
     return 3;
 }
 const char* still_webview_cookie(const char* name) { (void)name; return ""; }

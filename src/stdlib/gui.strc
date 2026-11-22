@@ -31,6 +31,8 @@ extern "C":
     func still_gui_mouse_clicked(win: int) -> int
     func still_gui_wheel_delta(win: int) -> int
     func still_gui_text_input(win: int) -> str
+    func still_gui_clipboard_read() -> str
+    func still_gui_clipboard_write(text: str) -> int
     func still_gui_key(win: int, vk: int) -> int
     func still_gui_key_pressed(win: int, vk: int) -> int
     func still_gui_text(win: int, x: float, y: float, text: str, rgb: int, size: float)
@@ -94,6 +96,12 @@ func wheel_delta(win: int) -> int:
 
 func text_input(win: int) -> str:
     return still_gui_text_input(win)
+
+func clipboard_read() -> str:
+    return still_gui_clipboard_read()
+
+func clipboard_write(text: str) -> bool:
+    return still_gui_clipboard_write(text) == 1
 
 func key(win: int, vk: int) -> bool:
     return still_gui_key(win, vk) == 1
