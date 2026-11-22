@@ -11,7 +11,9 @@ use vec
 #         ... poll mouse / keys / text_input
 #         end_frame(win)
 #
-# Colors are 0xRRGGBB ints (e.g. 0xFF3366). Coordinates are client-area pixels.
+# Colors are 0xRRGGBB ints (e.g. 0xFF3366). Coordinates are logical 96-DPI
+# pixels: open_window sizes are scaled to the monitor's DPI, and the runtime
+# scales every draw call and converts mouse/wheel input back to logical units.
 # Keyboard uses virtual-key codes (VK_*); common ones are defined below.
 
 extern "C":
@@ -52,6 +54,8 @@ extern "C":
 func available() -> bool:
     return still_gui_available() == 1
 
+# Open a resizable window. w/h are logical 96-DPI pixels; the runtime scales
+# them to the monitor's DPI so the client area is always w x h logical pixels.
 func open_window(title: str, w: int, h: int) -> int:
     return still_gui_open_window(title, w, h)
 
@@ -152,7 +156,9 @@ func system_dpi() -> int:
 # coordinates/sizes/font sizes are logical 96-DPI pixels scaled up by the
 # runtime, and mouse/wheel input comes back in the same logical units —
 # write layout code once like a web page and it is crisp at any DPI.
-# Call it every frame: set_scale(win, float(dpi(win)) / 96.0).
+# open_window already picks the monitor's DPI as the default scale; call this
+# every frame (set_scale(win, float(dpi(win)) / 96.0)) to follow monitor
+# changes and to take over the scale from the runtime.
 func set_scale(win: int, scale: float):
     still_gui_set_scale(win, scale)
 

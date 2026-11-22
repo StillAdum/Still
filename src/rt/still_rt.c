@@ -2349,6 +2349,7 @@ typedef struct {
     int font_count;
     int dpi;
     double scale;           /* logical->physical factor (dpi/96), 1.0 default */
+    int scale_user;         /* 1 once the program calls set_scale itself */
 } StilWindow;
 
 static StilWindow g_wins[STIL_GUI_MAX];
@@ -2411,7 +2412,17 @@ LRESULT CALLBACK gui_wndproc_real(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_DPICHANGED: {
-            if (w) w->dpi = (int)LOWORD(wp);
+            if (w) {
+                w->dpi = (int)LOWORD(wp);
+                /* programs that never call set_scale keep following the
+                   monitor; set_scale callers drive the scale themselves */
+                if (!w->scale_user) {
+                    double s = (double)w->dpi / 96.0;
+                    if (s < 0.25) s = 0.25;
+                    if (s > 8.0) s = 8.0;
+                    w->scale = s;
+                }
+            }
             RECT* sugg = (RECT*)lp;
             if (sugg) {
                 SetWindowPos(hwnd, NULL, sugg->left, sugg->top,
@@ -2521,9 +2532,25 @@ int64_t still_gui_open_window(const char* title, int64_t w, int64_t h) {
         return 0;
     }
     win->hwnd = hwnd;
-    win->w = (int)w;
-    win->h = (int)h;
     win->dpi = (int)gui_window_dpi(hwnd);
+    /* w/h are logical 96-DPI pixels (like CSS pixels). Scale the client area
+       to the monitor so the app gets the size it asked for at any display
+       zoom, then keep that scale as the default so drawing is crisp even
+       before the program calls set_scale. */
+    double dpi_scale = (win->dpi > 0) ? (double)win->dpi / 96.0 : 1.0;
+    if (dpi_scale < 0.25) dpi_scale = 0.25;
+    if (dpi_scale > 8.0) dpi_scale = 8.0;
+    int cw = (int)((double)w * dpi_scale + 0.5);
+    int ch = (int)((double)h * dpi_scale + 0.5);
+    RECT cr = {0, 0, (LONG)cw, (LONG)ch};
+    AdjustWindowRect(&cr, WS_OVERLAPPEDWINDOW, FALSE);
+    SetWindowPos(hwnd, NULL, 0, 0, cr.right - cr.left, cr.bottom - cr.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    RECT got;
+    GetClientRect(hwnd, &got);
+    win->w = (int)(got.right - got.left);
+    win->h = (int)(got.bottom - got.top);
+    win->scale = dpi_scale;
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
     return (int64_t)(uintptr_t)hwnd;
@@ -2540,6 +2567,7 @@ void still_gui_set_scale(int64_t handle, double scale) {
     if (scale < 0.25) scale = 0.25;
     if (scale > 8.0) scale = 8.0;
     w->scale = scale;
+    w->scale_user = 1;
 }
 
 int64_t still_gui_window_open(int64_t handle) {

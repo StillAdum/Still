@@ -1,3 +1,14 @@
+# Still v0.6.21 — DPI-correct initial window size
+
+- **Honor `open_window` sizes as logical pixels.** `gui.open_window` now
+  scales the requested client area by the monitor's DPI, so an app that asks
+  for 1180x780 gets 1180x780 logical pixels at 125%, 150%, 200% and every
+  other display zoom instead of a progressively smaller layout.
+- **Default logical scale follows the monitor.** The runtime starts a window
+  at `dpi/96` and updates that default on `WM_DPICHANGED`; programs that call
+  `set_scale` each frame keep full control, and programs that do not still
+  render crisply and proportionally.
+
 # Still v0.6.20 — Clipboard support and owned WebView login
 
 - Add Unicode clipboard read/write functions to the GUI standard library for
