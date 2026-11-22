@@ -3652,16 +3652,21 @@ static void wv2_begin_teardown(void) {
 static LRESULT CALLBACK wv2_login_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_SIZE:
-            wv2_resize();
+            /* WM_SIZE/WM_TIMER can fire from inside DefWindowProc's modal
+               loops (drag, maximize, uxtheme paint); during/after teardown
+               the COM objects may already be freed (0xC0000005 +0x9DFF2) */
+            if (!g_wv2_teardown_started && g_wv2_ctrl_obj) wv2_resize();
             return 0;
         case WM_TIMER:
-            if (wp == 1) wv2_poll_cookies();
+            if (wp == 1 && !g_wv2_teardown_started && g_wv2_ctrl_obj) wv2_poll_cookies();
             return 0;
         case WM_CLOSE:
-            if (g_wv2_status == 0) g_wv2_status = 2;
-            /* close the controller BEFORE destroying its parent window */
-            wv2_begin_teardown();
-            DestroyWindow(hwnd);
+            if (!g_wv2_teardown_started) {
+                if (g_wv2_status == 0) g_wv2_status = 2;
+                /* close the controller BEFORE destroying its parent window */
+                wv2_begin_teardown();
+                DestroyWindow(hwnd);
+            }
             return 0;
         case WM_DESTROY:
             KillTimer(hwnd, 1);
