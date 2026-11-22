@@ -1,3 +1,11 @@
+# Still v0.6.20 — Clipboard support and owned WebView login
+
+- Add Unicode clipboard read/write functions to the GUI standard library for
+  editable text fields.
+- Allow WebView2 login windows to be owned by the calling app window, and
+  create the Wingram WebView2 profile directories before launching the
+  browser.
+
 # Still v0.6.19 — Win32 maximize layout and re-entrant WebView callbacks
 
 - **Correct Win32 maximize constraints.** The GUI window procedure now uses
