@@ -569,7 +569,10 @@ void still_gui_fill_round(int64_t handle, double x, double y, double w, double h
 void still_gui_fill_circle(int64_t handle, double cx, double cy, double rad, int64_t rgb);
 void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, double width, int64_t rgb);
 void still_gui_clip_push(int64_t handle, double x, double y, double w, double h);
+void still_gui_clip_circle(int64_t handle, double cx, double cy, double rad);
 void still_gui_clip_pop(int64_t handle);
+void still_gui_fill_triangle(int64_t handle, double x1, double y1, double x2, double y2, double x3, double y3, int64_t rgb);
+void still_gui_draw_line(int64_t handle, double x1, double y1, double x2, double y2, double width, int64_t rgb);
 void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, double w, double h);
 int64_t still_gui_dpi(int64_t handle);
 int64_t still_gui_system_dpi(void);

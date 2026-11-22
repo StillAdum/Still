@@ -1,3 +1,19 @@
+# Still v0.6.23 — Anti-aliased vector drawing (crisp shapes)
+
+- **Shapes are now anti-aliased.** `gui.fill_round`, `gui.fill_circle` and
+  `gui.stroke_circle` render through GDI+ with smoothing on instead of the
+  aliased GDI `RoundRect`/`Ellipse` calls. Buttons, avatars, rings and every
+  round shape are smooth at any size instead of stair-stepped. The change is
+  a pure upgrade: if GDI+ is unavailable the runtime falls back to the old
+  GDI path, so nothing breaks.
+- **New vector primitives.** `gui.fill_triangle` (filled, anti-aliased) and
+  `gui.draw_line` (straight pen stroke) let programs draw arbitrary polygon
+  and stroke icons — the building blocks for crisp, resolution-independent
+  glyph sets instead of rect/circle approximations.
+- **New `gui.clip_circle`.** A circular clipping region (paired with the
+  existing `gui.clip_pop`) so avatars and media can be drawn as clean
+  circles, not squares.
+
 # Still v0.6.22 — Keep the WebView2 controller alive
 
 - **Fix the blank WebView login window.** The environment and controller

@@ -44,6 +44,9 @@ extern "C":
     func still_gui_fill_round(win: int, x: float, y: float, w: float, h: float, rad: float, rgb: int)
     func still_gui_fill_circle(win: int, cx: float, cy: float, rad: float, rgb: int)
     func still_gui_stroke_circle(win: int, cx: float, cy: float, rad: float, width: float, rgb: int)
+    func still_gui_fill_triangle(win: int, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float, rgb: int)
+    func still_gui_draw_line(win: int, x1: float, y1: float, x2: float, y2: float, width: float, rgb: int)
+    func still_gui_clip_circle(win: int, cx: float, cy: float, rad: float)
     func still_gui_clip_push(win: int, x: float, y: float, w: float, h: float)
     func still_gui_clip_pop(win: int)
     func still_gui_draw_image(win: int, img: int, x: float, y: float, w: float, h: float)
@@ -133,6 +136,18 @@ func fill_circle(win: int, cx: float, cy: float, rad: float, rgb: int):
 
 func stroke_circle(win: int, cx: float, cy: float, rad: float, width: float, rgb: int):
     still_gui_stroke_circle(win, cx, cy, rad, width, rgb)
+
+# filled triangle (anti-aliased) — the building block for polygon icons
+func fill_triangle(win: int, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float, rgb: int):
+    still_gui_fill_triangle(win, x1, y1, x2, y2, x3, y3, rgb)
+
+# straight line with a pen width (anti-aliased)
+func draw_line(win: int, x1: float, y1: float, x2: float, y2: float, width: float, rgb: int):
+    still_gui_draw_line(win, x1, y1, x2, y2, width, rgb)
+
+# circular clip (for round avatars); pair with clip_pop
+func clip_circle(win: int, cx: float, cy: float, rad: float):
+    still_gui_clip_circle(win, cx, cy, rad)
 
 func clip_push(win: int, x: float, y: float, w: float, h: float):
     still_gui_clip_push(win, x, y, w, h)

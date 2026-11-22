@@ -2315,6 +2315,45 @@ void still_net_free(int64_t id) {
     net_slot_free(id);
 }
 
+/* ============================================================ GDI+ flat API (anti-aliased shapes)
+   Shared by the media (image) and gui (shape) sections. The pointers are
+   resolved lazily by still_media_available(); the gui shape helpers fall
+   back to plain GDI when GDI+ is unavailable, so this is a pure upgrade.
+   GpUnit values: UnitPixel = 2. GpFillMode: Alternate = 0, Winding = 1.
+   GpSmoothingMode: AntiAlias = 4 (matches the GDI+ SDK enum order). */
+
+typedef long GpStatus;
+typedef void GpImage;
+typedef void GpGraphics;
+typedef void GpBrush;
+typedef void GpPen;
+typedef void GpPath;
+typedef unsigned int ARGB;
+typedef struct { int X, Y; } GpPoint;
+
+static GpStatus (*p_GdipLoadImageFromFile)(const wchar_t*, GpImage**) = NULL;
+static GpStatus (*p_GdipDisposeImage)(GpImage*) = NULL;
+static GpStatus (*p_GdipGetImageWidth)(GpImage*, unsigned int*) = NULL;
+static GpStatus (*p_GdipGetImageHeight)(GpImage*, unsigned int*) = NULL;
+static GpStatus (*p_GdipCreateFromHDC)(HDC, GpGraphics**) = NULL;
+static GpStatus (*p_GdipDeleteGraphics)(GpGraphics*) = NULL;
+static GpStatus (*p_GdipDrawImageRectI)(GpGraphics*, GpImage*, int, int, int, int) = NULL;
+static GpStatus (*p_GdipSetInterpolationMode)(GpGraphics*, int) = NULL;
+static GpStatus (*p_GdipSetSmoothingMode)(GpGraphics*, int) = NULL;
+static GpStatus (*p_GdipFillEllipse)(GpGraphics*, GpBrush*, float, float, float, float) = NULL;
+static GpStatus (*p_GdipDrawEllipse)(GpGraphics*, GpPen*, float, float, float, float) = NULL;
+static GpStatus (*p_GdipDrawLine)(GpGraphics*, GpPen*, float, float, float, float) = NULL;
+static GpStatus (*p_GdipFillPolygonI)(GpGraphics*, GpBrush*, GpPoint*, int, int) = NULL;
+static GpStatus (*p_GdipCreateSolidFill)(ARGB, GpBrush**) = NULL;
+static GpStatus (*p_GdipDeleteBrush)(GpBrush*) = NULL;
+static GpStatus (*p_GdipCreatePen1)(ARGB, float, int, GpPen**) = NULL;
+static GpStatus (*p_GdipDeletePen)(GpPen*) = NULL;
+static GpStatus (*p_GdipCreatePath)(int, GpPath**) = NULL;
+static GpStatus (*p_GdipDeletePath)(GpPath*) = NULL;
+static GpStatus (*p_GdipAddPathArc)(GpPath*, float, float, float, float, float, float) = NULL;
+static GpStatus (*p_GdipClosePathFigure)(GpPath*) = NULL;
+static GpStatus (*p_GdipFillPath)(GpGraphics*, GpBrush*, GpPath*) = NULL;
+
 /* ============================================================ gui: Win32 window + GDI */
 
 #define STIL_GUI_MAX 8
@@ -2458,6 +2497,36 @@ static StilWindow* gui_win(int64_t handle) {
         if (g_wins[i].hwnd == (HWND)(uintptr_t)handle) return &g_wins[i];
     }
     return NULL;
+}
+
+/* Create a short-lived GDI+ Graphics over the window's backbuffer with
+   anti-aliasing on. The Graphics inherits the DC's current clip region
+   (set by clip_push / clip_circle), so callers that clip first then draw
+   are clipped correctly. Returns NULL when GDI+ is unavailable and the
+   caller should use the GDI fallback path. Always pair with
+   p_GdipDeleteGraphics. */
+static GpGraphics* gui_aa_begin(StilWindow* win) {
+    if (!win || !win->mem) return NULL;
+    if (!still_media_available()) return NULL;
+    if (!p_GdipCreateFromHDC || !p_GdipDeleteGraphics) return NULL;
+    GpGraphics* g = NULL;
+    if (p_GdipCreateFromHDC(win->mem, &g) != 0 || !g) return NULL;
+    if (p_GdipSetSmoothingMode) p_GdipSetSmoothingMode(g, 4 /* AntiAlias */);
+    if (p_GdipSetInterpolationMode) p_GdipSetInterpolationMode(g, 7 /* HighQualityBicubic */);
+    return g;
+}
+
+static int gui_aa_shape_ok(void) {
+    if (!still_media_available()) return 0;
+    return p_GdipFillEllipse && p_GdipDrawEllipse && p_GdipDrawLine &&
+           p_GdipFillPolygonI && p_GdipCreateSolidFill && p_GdipDeleteBrush &&
+           p_GdipCreatePen1 && p_GdipDeletePen && p_GdipCreatePath &&
+           p_GdipDeletePath && p_GdipAddPathArc && p_GdipClosePathFigure &&
+           p_GdipFillPath;
+}
+
+static ARGB gui_argb(int64_t rgb) {
+    return 0xFF000000u | (ARGB)((int64_t)rgb & 0xFFFFFF);
 }
 
 int64_t still_gui_available(void) {
@@ -2888,6 +2957,29 @@ void still_gui_fill_round(int64_t handle, double x, double y, double w, double h
     if (rad < 1) rad = 1;
     if (rad * 2 > w) rad = w / 2;
     if (rad * 2 > h) rad = h / 2;
+    if (gui_aa_shape_ok()) {
+        GpGraphics* g = gui_aa_begin(win);
+        if (g) {
+            GpBrush* br = NULL;
+            GpPath* path = NULL;
+            if (p_GdipCreateSolidFill(gui_argb(rgb), &br) == 0 && br &&
+                p_GdipCreatePath(0 /* Alternate */, &path) == 0 && path) {
+                float fx = (float)x, fy = (float)y, fw = (float)w, fh = (float)h, fr = (float)rad;
+                float d = fr * 2.0f;
+                p_GdipAddPathArc(path, fx, fy, d, d, 180.0f, 90.0f);
+                p_GdipAddPathArc(path, fx + fw - d, fy, d, d, 270.0f, 90.0f);
+                p_GdipAddPathArc(path, fx + fw - d, fy + fh - d, d, d, 0.0f, 90.0f);
+                p_GdipAddPathArc(path, fx, fy + fh - d, d, d, 90.0f, 90.0f);
+                p_GdipClosePathFigure(path);
+                p_GdipFillPath(g, br, path);
+            }
+            if (path) p_GdipDeletePath(path);
+            if (br) p_GdipDeleteBrush(br);
+            p_GdipDeleteGraphics(g);
+            return;
+        }
+    }
+    /* GDI fallback */
     HBRUSH b = CreateSolidBrush(gui_rgb(rgb));
     HPEN pen = CreatePen(PS_NULL, 1, 0);
     HPEN old_pen = (HPEN)SelectObject(win->mem, pen);
@@ -2904,6 +2996,19 @@ void still_gui_fill_circle(int64_t handle, double cx, double cy, double rad, int
     if (!win || !win->mem) return;
     double sc = win->scale;
     cx *= sc; cy *= sc; rad *= sc;
+    if (gui_aa_shape_ok()) {
+        GpGraphics* g = gui_aa_begin(win);
+        if (g) {
+            GpBrush* br = NULL;
+            if (p_GdipCreateSolidFill(gui_argb(rgb), &br) == 0 && br) {
+                float fx = (float)(cx - rad), fy = (float)(cy - rad), fd = (float)(rad * 2.0);
+                p_GdipFillEllipse(g, br, fx, fy, fd, fd);
+                p_GdipDeleteBrush(br);
+            }
+            p_GdipDeleteGraphics(g);
+            return;
+        }
+    }
     HBRUSH b = CreateSolidBrush(gui_rgb(rgb));
     HPEN pen = CreatePen(PS_NULL, 1, 0);
     HPEN old_pen = (HPEN)SelectObject(win->mem, pen);
@@ -2920,11 +3025,99 @@ void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, d
     if (!win || !win->mem) return;
     double sc = win->scale;
     cx *= sc; cy *= sc; rad *= sc; width *= sc;
+    if (width < 1) width = 1;
+    if (gui_aa_shape_ok()) {
+        GpGraphics* g = gui_aa_begin(win);
+        if (g) {
+            GpPen* pen = NULL;
+            if (p_GdipCreatePen1(gui_argb(rgb), (float)width, 2 /* UnitPixel */, &pen) == 0 && pen) {
+                float fx = (float)(cx - rad), fy = (float)(cy - rad), fd = (float)(rad * 2.0);
+                p_GdipDrawEllipse(g, pen, fx, fy, fd, fd);
+                p_GdipDeletePen(pen);
+            }
+            p_GdipDeleteGraphics(g);
+            return;
+        }
+    }
     HPEN pen = CreatePen(PS_SOLID, (int)(width < 1 ? 1 : width), gui_rgb(rgb));
     HPEN old_pen = (HPEN)SelectObject(win->mem, pen);
     HBRUSH old_brush = (HBRUSH)SelectObject(win->mem, GetStockObject(NULL_BRUSH));
     Ellipse(win->mem, (int)(cx - rad), (int)(cy - rad), (int)(cx + rad), (int)(cy + rad));
     SelectObject(win->mem, old_brush);
+    SelectObject(win->mem, old_pen);
+    DeleteObject(pen);
+}
+
+/* filled triangle (anti-aliased); the building block for polygon icons */
+void still_gui_fill_triangle(int64_t handle, double x1, double y1, double x2, double y2,
+                             double x3, double y3, int64_t rgb) {
+    StilWindow* win = gui_win(handle);
+    if (!win || !win->mem) return;
+    double sc = win->scale;
+    if (gui_aa_shape_ok()) {
+        GpGraphics* g = gui_aa_begin(win);
+        if (g) {
+            GpBrush* br = NULL;
+            if (p_GdipCreateSolidFill(gui_argb(rgb), &br) == 0 && br) {
+                GpPoint pts[3];
+                pts[0].X = (int)(x1 * sc); pts[0].Y = (int)(y1 * sc);
+                pts[1].X = (int)(x2 * sc); pts[1].Y = (int)(y2 * sc);
+                pts[2].X = (int)(x3 * sc); pts[2].Y = (int)(y3 * sc);
+                p_GdipFillPolygonI(g, br, pts, 3, 0 /* Alternate */);
+                p_GdipDeleteBrush(br);
+            }
+            p_GdipDeleteGraphics(g);
+            return;
+        }
+    }
+    /* GDI fallback: scanline fill of the triangle with 1px spans */
+    double miny = y1; if (y2 < miny) miny = y2; if (y3 < miny) miny = y3;
+    double maxy = y1; if (y2 > maxy) maxy = y2; if (y3 > maxy) maxy = y3;
+    HBRUSH b = CreateSolidBrush(gui_rgb(rgb));
+    int y0 = (int)(miny * sc), y1i = (int)(maxy * sc) + 1;
+    for (int yy = y0; yy < y1i; yy++) {
+        double sy = (yy + 0.5) / sc;
+        double xs[3]; int n = 0;
+        double ay = y1; double ax = x1;
+        double by = y2; double bx = x2;
+        double cy2 = y3; double cx2 = x3;
+        if ((ay <= sy && by > sy) || (by <= sy && ay > sy)) xs[n++] = ax + (sy - ay) / (by - ay) * (bx - ax);
+        if ((by <= sy && cy2 > sy) || (cy2 <= sy && by > sy)) xs[n++] = bx + (sy - by) / (cy2 - by) * (cx2 - bx);
+        if ((cy2 <= sy && ay > sy) || (ay <= sy && cy2 > sy)) xs[n++] = cx2 + (sy - cy2) / (ay - cy2) * (ax - cx2);
+        if (n >= 2) {
+            double lo = xs[0], hi = xs[0];
+            for (int k = 1; k < n; k++) { if (xs[k] < lo) lo = xs[k]; if (xs[k] > hi) hi = xs[k]; }
+            RECT r = { (LONG)(lo * sc), yy, (LONG)(hi * sc), yy + 1 };
+            if (r.right > r.left) FillRect(win->mem, &r, b);
+        }
+    }
+    DeleteObject(b);
+}
+
+/* straight line with the given pen width (anti-aliased) */
+void still_gui_draw_line(int64_t handle, double x1, double y1, double x2, double y2,
+                         double width, int64_t rgb) {
+    StilWindow* win = gui_win(handle);
+    if (!win || !win->mem) return;
+    double sc = win->scale;
+    if (width < 1) width = 1;
+    if (gui_aa_shape_ok()) {
+        GpGraphics* g = gui_aa_begin(win);
+        if (g) {
+            GpPen* pen = NULL;
+            if (p_GdipCreatePen1(gui_argb(rgb), (float)(width * sc), 2 /* UnitPixel */, &pen) == 0 && pen) {
+                p_GdipDrawLine(g, pen, (float)(x1 * sc), (float)(y1 * sc), (float)(x2 * sc), (float)(y2 * sc));
+                p_GdipDeletePen(pen);
+            }
+            p_GdipDeleteGraphics(g);
+            return;
+        }
+    }
+    /* GDI fallback */
+    HPEN pen = CreatePen(PS_SOLID, (int)(width * sc), gui_rgb(rgb));
+    HPEN old_pen = (HPEN)SelectObject(win->mem, pen);
+    MoveToEx(win->mem, (int)(x1 * sc), (int)(y1 * sc), NULL);
+    LineTo(win->mem, (int)(x2 * sc), (int)(y2 * sc));
     SelectObject(win->mem, old_pen);
     DeleteObject(pen);
 }
@@ -2935,6 +3128,20 @@ void still_gui_clip_push(int64_t handle, double x, double y, double w, double h)
     double sc = win->scale;
     SaveDC(win->mem);
     IntersectClipRect(win->mem, (int)(x * sc), (int)(y * sc), (int)((x + w) * sc), (int)((y + h) * sc));
+}
+
+/* circular clip (for round avatars); pair with clip_pop */
+void still_gui_clip_circle(int64_t handle, double cx, double cy, double rad) {
+    StilWindow* win = gui_win(handle);
+    if (!win || !win->mem) return;
+    double sc = win->scale;
+    SaveDC(win->mem);
+    HRGN rgn = CreateEllipticRgn((int)((cx - rad) * sc), (int)((cy - rad) * sc),
+                                 (int)((cx + rad) * sc), (int)((cy + rad) * sc));
+    if (rgn) {
+        SelectClipRgn(win->mem, rgn);
+        DeleteObject(rgn);
+    }
 }
 
 void still_gui_clip_pop(int64_t handle) {
@@ -3069,20 +3276,6 @@ int64_t still_audio_play_melody(const char* spec, int64_t loop) {
 static HMODULE g_media_gdiplus = NULL;
 static int g_media_ok = 0;
 
-typedef long GpStatus;
-typedef void GpImage;
-typedef void GpGraphics;
-
-static GpStatus (*p_GdipLoadImageFromFile)(const wchar_t*, GpImage**) = NULL;
-static GpStatus (*p_GdipDisposeImage)(GpImage*) = NULL;
-static GpStatus (*p_GdipGetImageWidth)(GpImage*, unsigned int*) = NULL;
-static GpStatus (*p_GdipGetImageHeight)(GpImage*, unsigned int*) = NULL;
-static GpStatus (*p_GdipCreateFromHDC)(HDC, GpGraphics**) = NULL;
-static GpStatus (*p_GdipDeleteGraphics)(GpGraphics*) = NULL;
-static GpStatus (*p_GdipDrawImageRectI)(GpGraphics*, GpImage*, int, int, int, int) = NULL;
-static GpStatus (*p_GdipSetInterpolationMode)(GpGraphics*, int) = NULL;
-static GpStatus (*p_GdipSetSmoothingMode)(GpGraphics*, int) = NULL;
-
 int64_t still_media_available(void) {
     if (g_media_ok) return 1;
     g_media_gdiplus = LoadLibraryA("gdiplus.dll");
@@ -3104,6 +3297,21 @@ int64_t still_media_available(void) {
     p_GdipDrawImageRectI = (void*)GetProcAddress(g_media_gdiplus, "GdipDrawImageRectI");
     p_GdipSetInterpolationMode = (void*)GetProcAddress(g_media_gdiplus, "GdipSetInterpolationMode");
     p_GdipSetSmoothingMode = (void*)GetProcAddress(g_media_gdiplus, "GdipSetSmoothingMode");
+    /* anti-aliased vector shape primitives used by the gui helpers; optional
+       for media, so not part of the g_media_ok gate below */
+    p_GdipFillEllipse = (void*)GetProcAddress(g_media_gdiplus, "GdipFillEllipse");
+    p_GdipDrawEllipse = (void*)GetProcAddress(g_media_gdiplus, "GdipDrawEllipse");
+    p_GdipDrawLine = (void*)GetProcAddress(g_media_gdiplus, "GdipDrawLine");
+    p_GdipFillPolygonI = (void*)GetProcAddress(g_media_gdiplus, "GdipFillPolygonI");
+    p_GdipCreateSolidFill = (void*)GetProcAddress(g_media_gdiplus, "GdipCreateSolidFill");
+    p_GdipDeleteBrush = (void*)GetProcAddress(g_media_gdiplus, "GdipDeleteBrush");
+    p_GdipCreatePen1 = (void*)GetProcAddress(g_media_gdiplus, "GdipCreatePen1");
+    p_GdipDeletePen = (void*)GetProcAddress(g_media_gdiplus, "GdipDeletePen");
+    p_GdipCreatePath = (void*)GetProcAddress(g_media_gdiplus, "GdipCreatePath");
+    p_GdipDeletePath = (void*)GetProcAddress(g_media_gdiplus, "GdipDeletePath");
+    p_GdipAddPathArc = (void*)GetProcAddress(g_media_gdiplus, "GdipAddPathArc");
+    p_GdipClosePathFigure = (void*)GetProcAddress(g_media_gdiplus, "GdipClosePathFigure");
+    p_GdipFillPath = (void*)GetProcAddress(g_media_gdiplus, "GdipFillPath");
     if (!p_GdipLoadImageFromFile || !p_GdipDisposeImage || !p_GdipGetImageWidth || !p_GdipGetImageHeight ||
         !p_GdipCreateFromHDC || !p_GdipDeleteGraphics || !p_GdipDrawImageRectI) return 0;
     g_media_ok = 1;
@@ -4109,6 +4317,15 @@ void still_gui_stroke_circle(int64_t handle, double cx, double cy, double rad, d
 }
 void still_gui_clip_push(int64_t handle, double x, double y, double w, double h) {
     (void)handle; (void)x; (void)y; (void)w; (void)h;
+}
+void still_gui_fill_triangle(int64_t handle, double x1, double y1, double x2, double y2, double x3, double y3, int64_t rgb) {
+    (void)handle; (void)x1; (void)y1; (void)x2; (void)y2; (void)x3; (void)y3; (void)rgb;
+}
+void still_gui_draw_line(int64_t handle, double x1, double y1, double x2, double y2, double width, int64_t rgb) {
+    (void)handle; (void)x1; (void)y1; (void)x2; (void)y2; (void)width; (void)rgb;
+}
+void still_gui_clip_circle(int64_t handle, double cx, double cy, double rad) {
+    (void)handle; (void)cx; (void)cy; (void)rad;
 }
 void still_gui_clip_pop(int64_t handle) { (void)handle; }
 void still_gui_draw_image(int64_t handle, int64_t img, double x, double y, double w, double h) {
