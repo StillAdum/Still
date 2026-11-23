@@ -1,3 +1,13 @@
+# Still v0.6.24 — Fix multi-line network headers
+
+- **Fix heap corruption when a request has multiple headers.** The WinHTTP
+  backend now allocates space for every inserted carriage return while
+  converting newline-separated headers to CRLF. Requests with several header
+  lines previously overwrote the heap and could terminate the process; this
+  affected Wingram's Instagram API calls after login.
+- The Windows network example now exercises a five-line header block to keep
+  this regression covered in CI.
+
 # Still v0.6.23 — Anti-aliased vector drawing (crisp shapes)
 
 - **Shapes are now anti-aliased.** `gui.fill_round`, `gui.fill_circle` and

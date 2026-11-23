@@ -15,8 +15,9 @@ if not net.available():
     stage("unavailable - skipping (needs Windows WinHTTP)")
 else:
     stage("available ok")
-    stage("request GET api.github.com/repos/StillAdum/Still")
-    r = net.get("https://api.github.com/repos/StillAdum/Still", "User-Agent: still-demo", 15000)
+    stage("request GET with multi-line headers")
+    headers = "User-Agent: still-demo\nAccept: application/json\nX-Requested-With: XMLHttpRequest\nX-IG-App-ID: 936619743392459\nReferer: https://github.com/StillAdum/Still"
+    r = net.get("https://api.github.com/repos/StillAdum/Still", headers, 15000)
     stage("request returned ok={r.ok}")
     if r.ok:
         stage("status={r.status} ctype={r.content_type} body={len(r.body)}B")

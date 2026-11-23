@@ -2157,19 +2157,25 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
         }
 
         if (headers && headers[0]) {
-            /* duplicate the header block so we can turn \n into \r\n */
+            /* Convert newline-separated headers to WinHTTP's CRLF format. */
             size_t hl = strlen(headers);
-            char* hcopy = (char*)malloc(hl + 2);
-            if (!hcopy) { net_set_err("out of memory"); break; }
-            memcpy(hcopy, headers, hl + 1);
+            size_t nl = 0;
             for (size_t i = 0; i < hl; i++) {
-                if (hcopy[i] == '\n' && (i == 0 || hcopy[i - 1] != '\r')) {
-                    memmove(hcopy + i + 1, hcopy + i, hl - i + 1);
-                    hcopy[i] = '\r';
-                    hl++;
-                    i++;
-                }
+                if (headers[i] == '\n' && (i == 0 || headers[i - 1] != '\r')) nl++;
             }
+            if (hl == SIZE_MAX || nl > SIZE_MAX - hl - 1) {
+                net_set_err("header block is too large");
+                break;
+            }
+            char* hcopy = (char*)malloc(hl + nl + 1);
+            if (!hcopy) { net_set_err("out of memory"); break; }
+            size_t out = 0;
+            for (size_t i = 0; i < hl; i++) {
+                if (headers[i] == '\n' && (i == 0 || headers[i - 1] != '\r'))
+                    hcopy[out++] = '\r';
+                hcopy[out++] = headers[i];
+            }
+            hcopy[out] = 0;
             wchar_t* w_hdrs = still_wide(hcopy);
             free(hcopy);
             if (w_hdrs) {
