@@ -22,6 +22,7 @@ extern "C":
     func still_webview_last_error() -> str
     func still_webview_login(start_url: str, poll_url: str, wanted: str, timeout_ms: int, owner: int) -> int
     func still_webview_cookie(name: str) -> str
+    func still_webview_cookie_string() -> str
     func still_webview_poll_count() -> int
     func still_webview_stage() -> int
     func still_webview_bounds_ok() -> int
@@ -62,6 +63,10 @@ func bounds_ok() -> bool:
 
 func cookie(name: str) -> str:
     return still_webview_cookie(name)
+
+# all captured cookies as a "name=value; name=value" Cookie header string
+func cookie_string() -> str:
+    return still_webview_cookie_string()
 
 # convenience: did a non-empty cookie with this name get captured?
 func has_cookie(name: str) -> bool:

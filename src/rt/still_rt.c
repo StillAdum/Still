@@ -4004,6 +4004,34 @@ const char* still_webview_cookie(const char* name) {
     return "";
 }
 
+/* Return ALL captured cookies as a "name=value; name=value" string,
+   suitable for use as a Cookie header. Includes every cookie the webview
+   captured during login (sessionid, ds_user_id, csrftoken, mid, ig_u_rur,
+   ig_www_claim, etc.), not just the three Wingram historically read. */
+static char g_wv2_cookie_string[4096] = {0};
+const char* still_webview_cookie_string(void) {
+    g_wv2_cookie_string[0] = 0;
+    size_t pos = 0;
+    size_t cap = sizeof(g_wv2_cookie_string);
+    for (int i = 0; i < g_wv2_cookie_count; i++) {
+        size_t n = strlen(g_wv2_cookies[i].name);
+        size_t v = strlen(g_wv2_cookies[i].value);
+        if (pos + n + v + 3 >= cap) break;   // name=value; + null
+        if (pos > 0) {
+            g_wv2_cookie_string[pos++] = ' ';
+            g_wv2_cookie_string[pos++] = ';';
+            g_wv2_cookie_string[pos++] = ' ';
+        }
+        memcpy(g_wv2_cookie_string + pos, g_wv2_cookies[i].name, n);
+        pos += n;
+        g_wv2_cookie_string[pos++] = '=';
+        memcpy(g_wv2_cookie_string + pos, g_wv2_cookies[i].value, v);
+        pos += v;
+    }
+    g_wv2_cookie_string[pos] = 0;
+    return g_wv2_cookie_string;
+}
+
 /* completed GetCookies round-trips of the last login() call — a non-zero
    value proves the env -> controller -> navigate -> QI -> cookie-manager
    -> async-callback chain executed (used by CI probes when the target
@@ -4530,6 +4558,7 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     return 3;
 }
 const char* still_webview_cookie(const char* name) { (void)name; return ""; }
+const char* still_webview_cookie_string(void) { return ""; }
 int64_t still_webview_poll_count(void) { return 0; }
 int64_t still_webview_stage(void) { return 0; }
 
