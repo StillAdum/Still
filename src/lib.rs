@@ -14,7 +14,7 @@ use span::Diag;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-pub const VERSION: &str = "0.6.24";
+pub const VERSION: &str = "0.6.25";
 
 pub const STD_MATH: &str = include_str!("stdlib/math.strc");
 pub const STD_SORT: &str = include_str!("stdlib/sort.strc");
@@ -46,6 +46,7 @@ pub const STD_PARSER_KIT: &str = include_str!("stdlib/parser_kit.strc");
 pub const STD_WIN32: &str = include_str!("stdlib/win32.strc");
 pub const STD_DIRECTX: &str = include_str!("stdlib/directx.strc");
 pub const STD_MEDIA: &str = include_str!("stdlib/media.strc");
+pub const STD_DIALOG: &str = include_str!("stdlib/dialog.strc");
 pub const STD_IPC: &str = include_str!("stdlib/ipc.strc");
 pub const STD_DEBUG: &str = include_str!("stdlib/debug.strc");
 pub const STD_HOTRELOAD: &str = include_str!("stdlib/hotreload.strc");
@@ -101,6 +102,7 @@ pub fn std_modules() -> Vec<(&'static str, &'static str)> {
         ("win32", STD_WIN32),
         ("directx", STD_DIRECTX),
         ("media", STD_MEDIA),
+        ("dialog", STD_DIALOG),
         ("ipc", STD_IPC),
         ("debug", STD_DEBUG),
         ("hotreload", STD_HOTRELOAD),

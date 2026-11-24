@@ -4255,6 +4255,160 @@ int64_t still_webview_login(const char* start_url, const char* poll_url, const c
     return (int64_t)result;
 }
 
+/* ============================================================ dialog: native file pickers */
+
+/* OPENFILENAMEW is declared here instead of including <commdlg.h>: the
+   portable tcc distribution ships windows.h without the common-dialog
+   headers, and comdlg32 is resolved lazily so no import library is needed.
+   The layout follows the documented Win32 ABI (CommDlg.h). */
+
+typedef struct {
+    DWORD   lStructSize;
+    HWND    hwndOwner;
+    HINSTANCE hInstance;
+    LPCWSTR lpstrFilter;
+    LPWSTR  lpstrCustomFilter;
+    DWORD   nMaxCustFilter;
+    DWORD   nFilterIndex;
+    LPWSTR  lpstrFile;
+    DWORD   nMaxFile;
+    LPWSTR  lpstrFileTitle;
+    DWORD   nMaxFileTitle;
+    LPCWSTR lpstrInitialDir;
+    LPCWSTR lpstrTitle;
+    DWORD   Flags;
+    WORD    nFileOffset;
+    WORD    nFileExtension;
+    LPCWSTR lpstrDefExt;
+    LPARAM  lCustData;
+    void*   lpfnHook;
+    LPCWSTR lpTemplateName;
+    void*   pvReserved;
+    DWORD   dwReserved;
+    DWORD   FlagsEx;
+} StilOpenFileNameW;
+
+typedef BOOL (WINAPI *StilDialogFn)(void*);
+
+#define STIL_OFN_OVERWRITEPROMPT 0x00000002
+#define STIL_OFN_HIDEREADONLY    0x00000004
+#define STIL_OFN_NOCHANGEDIR     0x00000008
+#define STIL_OFN_PATHMUSTEXIST   0x00000800
+#define STIL_OFN_FILEMUSTEXIST   0x00001000
+#define STIL_OFN_EXPLORER        0x00080000
+
+/* UTF-16 buffer returned to Still is borrowed: the caller copies it into a
+   still_str immediately, so one reusable buffer per process is enough. */
+static char* g_dialog_result = NULL;
+
+/* "*.png;*.jpg" -> L"Supported files\0*.png;*.jpg\0All files\0*.*\0\0" */
+static wchar_t* still_dialog_filter(const char* pattern) {
+    static const wchar_t label[] = L"Supported files";
+    static const wchar_t all[] = L"All files";
+    static const wchar_t any[] = L"*.*";
+    const char* pat = (pattern && pattern[0]) ? pattern : "*.*";
+    int plen = (int)strlen(pat);
+    int llen = (int)(sizeof(label) / sizeof(wchar_t)) - 1;
+    int alen = (int)(sizeof(all) / sizeof(wchar_t)) - 1;
+    int anylen = (int)(sizeof(any) / sizeof(wchar_t)) - 1;
+    int total = llen + 1 + plen + 1 + alen + 1 + anylen + 1 + 1;
+    wchar_t* f = (wchar_t*)malloc((size_t)total * sizeof(wchar_t));
+    int o = 0;
+    if (!f) still_panic("memory", 0, "out of memory");
+    memcpy(f + o, label, sizeof(label) - sizeof(wchar_t)); o += llen;
+    f[o++] = 0;
+    if (MultiByteToWideChar(CP_UTF8, 0, pat, plen, f + o, plen) <= 0) {
+        memcpy(f + o, any, sizeof(any) - sizeof(wchar_t)); o += anylen;
+    } else {
+        o += plen;
+    }
+    f[o++] = 0;
+    memcpy(f + o, all, sizeof(all) - sizeof(wchar_t)); o += alen;
+    f[o++] = 0;
+    memcpy(f + o, any, sizeof(any) - sizeof(wchar_t)); o += anylen;
+    f[o++] = 0;
+    f[o++] = 0;
+    return f;
+}
+
+/* Extension of the first pattern ("*.png;*.jpg" -> "png") used as the default
+   extension for Save As. */
+static void still_dialog_defext(const char* pattern, wchar_t* out, int cap) {
+    int o = 0, i = 0;
+    out[0] = 0;
+    if (!pattern || !pattern[0] || cap < 2) return;
+    while (pattern[i] && pattern[i] != ';') i++;
+    for (int j = 0; j < i && pattern[j]; j++) {
+        if (pattern[j] == '.') {
+            for (int k = j + 1; k < i && pattern[k] && pattern[k] != '*' && pattern[k] != '?' && o < cap - 1; k++)
+                out[o++] = (wchar_t)pattern[k];
+            break;
+        }
+    }
+    out[o] = 0;
+}
+
+static const char* still_dialog_run(const char* api, const char* title,
+                                    const char* pattern, const char* default_name,
+                                    DWORD flags) {
+    HMODULE lib = LoadLibraryA("comdlg32.dll");
+    StilDialogFn fn;
+    StilOpenFileNameW ofn;
+    wchar_t path[32768];
+    wchar_t defext[16];
+    wchar_t* wfilter;
+    wchar_t* wtitle;
+    wchar_t* wname = NULL;
+    BOOL ok;
+    if (!lib) return "";
+    fn = (StilDialogFn)GetProcAddress(lib, api);
+    if (!fn) { FreeLibrary(lib); return ""; }
+    wfilter = still_dialog_filter(pattern);
+    wtitle = still_wide((title && title[0]) ? title : "Open");
+    if (default_name && default_name[0]) wname = still_wide(default_name);
+    path[0] = 0;
+    if (wname) {
+        int n = 0;
+        while (wname[n] && n < 32767) { path[n] = wname[n]; n++; }
+        path[n] = 0;
+    }
+    memset(&ofn, 0, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = GetActiveWindow();
+    ofn.lpstrFilter = wfilter;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = 32768;
+    ofn.lpstrTitle = wtitle;
+    ofn.Flags = flags;
+    if (flags & STIL_OFN_OVERWRITEPROMPT) {
+        still_dialog_defext(pattern, defext, 16);
+        if (defext[0]) ofn.lpstrDefExt = defext;
+    }
+    ok = fn(&ofn);
+    free(wfilter);
+    free(wtitle);
+    free(wname);
+    FreeLibrary(lib);
+    if (g_dialog_result) { free(g_dialog_result); g_dialog_result = NULL; }
+    if (!ok || path[0] == 0) return "";
+    g_dialog_result = still_narrow(path);
+    return g_dialog_result;
+}
+
+int64_t still_dialog_available(void) { return 1; }
+
+const char* still_dialog_open_file(const char* title, const char* filter) {
+    return still_dialog_run("GetOpenFileNameW", title, filter, NULL,
+        STIL_OFN_FILEMUSTEXIST | STIL_OFN_PATHMUSTEXIST | STIL_OFN_NOCHANGEDIR |
+        STIL_OFN_EXPLORER | STIL_OFN_HIDEREADONLY);
+}
+
+const char* still_dialog_save_file(const char* title, const char* default_name, const char* filter) {
+    return still_dialog_run("GetSaveFileNameW", title, filter, default_name,
+        STIL_OFN_OVERWRITEPROMPT | STIL_OFN_PATHMUSTEXIST | STIL_OFN_NOCHANGEDIR |
+        STIL_OFN_EXPLORER | STIL_OFN_HIDEREADONLY);
+}
+
 #else /* !_WIN32: graceful no-op backends so the same program typechecks and runs everywhere */
 
 static char* still_dup_cstr(const char* s) {
@@ -4354,6 +4508,16 @@ int64_t still_media_load(const char* path) { (void)path; return 0; }
 void still_media_free(int64_t img) { (void)img; }
 int64_t still_media_width(int64_t img) { (void)img; return 0; }
 int64_t still_media_height(int64_t img) { (void)img; return 0; }
+
+int64_t still_dialog_available(void) { return 0; }
+const char* still_dialog_open_file(const char* title, const char* filter) {
+    (void)title; (void)filter;
+    return "";
+}
+const char* still_dialog_save_file(const char* title, const char* default_name, const char* filter) {
+    (void)title; (void)default_name; (void)filter;
+    return "";
+}
 
 
 int64_t still_net_save_body(int64_t id, const char* path) { (void)id; (void)path; return 0; }

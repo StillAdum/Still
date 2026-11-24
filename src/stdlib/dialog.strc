@@ -1,0 +1,31 @@
+# dialog — native open/save file pickers (Win32 common dialogs)
+#
+# open_file() shows the system Open dialog and returns the chosen absolute
+# path, or "" when the user cancels. filter is a Win32 pattern list such as
+# "*.png;*.jpg"; the dialog also offers an "All files" entry.
+#
+# save_file() shows the Save As dialog with default_name prefilled and returns
+# the chosen path, or "" on cancel.
+#
+# available() is true when a native dialog backend exists. On other platforms
+# the pickers return "" so callers can fall back to typing a path.
+
+extern "C":
+    func still_dialog_available() -> int
+    func still_dialog_open_file(title: str, filter: str) -> str
+    func still_dialog_save_file(title: str, default_name: str, filter: str) -> str
+
+func image_filter() -> str:
+    return "*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.ico;*.tif;*.tiff"
+
+func available() -> bool:
+    return still_dialog_available() == 1
+
+func open_file(title: str, filter: str) -> str:
+    return still_dialog_open_file(title, filter)
+
+func open_image(title: str) -> str:
+    return still_dialog_open_file(title, image_filter())
+
+func save_file(title: str, default_name: str, filter: str) -> str:
+    return still_dialog_save_file(title, default_name, filter)
