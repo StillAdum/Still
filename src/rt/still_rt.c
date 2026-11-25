@@ -1977,6 +1977,12 @@ static char* still_dup_cstr(const char* s) {
 #define STIL_WINHTTP_DECOMPRESSION_FLAG_DEFLATE 0x00000002
 #define STIL_WINHTTP_ADDREQ_FLAG_ADD 0x20000000
 #define STIL_WINHTTP_ADDREQ_FLAG_REPLACE 0x80000000
+/* HTTP/2 protocol enablement (Windows 10 1809+). instagrapi's private mobile
+ * API transport uses HTTP/2 via curl; WinHTTP defaults to HTTP/1.1, which
+ * Instagram's i.instagram.com may reject for private API requests.
+ * WINHTTP_PROTOCOL_FLAG_HTTP2 = 0x1 (NOT 0x2 — that's HTTP/3). */
+#define STIL_WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL 126
+#define STIL_WINHTTP_PROTOCOL_FLAG_HTTP2 0x00000001
 
 #define STIL_NET_SLOTS 16
 #define STIL_NET_MAX_BODY (64 * 1024 * 1024)
@@ -2183,6 +2189,15 @@ int64_t still_net_request(const char* method, const char* url, const char* heade
                         STIL_WINHTTP_ADDREQ_FLAG_ADD | STIL_WINHTTP_ADDREQ_FLAG_REPLACE);
                 free(w_hdrs);
             }
+        }
+
+        /* Enable HTTP/2 on the request handle (WinHTTP defaults to HTTP/1.1).
+         * Instagram's private mobile API (i.instagram.com) is served over HTTP/2
+         * by instagrapi's curl transport. Silently ignore if the OS doesn't
+         * support this option (pre-Windows 10 1809). */
+        if (wSetOpt) {
+            DWORD h2 = STIL_WINHTTP_PROTOCOL_FLAG_HTTP2;
+            wSetOpt(hRequest, STIL_WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &h2, sizeof(h2));
         }
 
         net_trace("sending");
